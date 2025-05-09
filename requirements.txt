@@ -1,4 +1,8 @@
+fastapi==0.104.1
+python-multipart==0.0.6
+uvicorn==0.24.0
 PyAudio==0.2.13
 pygame==2.6.1
-groq
+groq==0.24.0
 python-dotenv==1.0.0
+aiofiles==23.2.1
