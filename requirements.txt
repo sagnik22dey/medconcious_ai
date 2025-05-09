@@ -1,0 +1,4 @@
+PyAudio==0.2.13
+pygame==2.6.1
+groq
+python-dotenv==1.0.0
