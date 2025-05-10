@@ -1,9 +1,6 @@
-from fastapi import FastAPI, UploadFile, File
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Body, HTTPException
+from fastapi.responses import JSONResponse
 import uvicorn
-from pathlib import Path
-import tempfile
-import os
 import base64
 from dotenv import load_dotenv, find_dotenv
 from static.helper_files.llm import speech_to_text, text_to_speech
@@ -14,65 +11,45 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Create temporary directory for audio files
-TEMP_DIR = Path("temp")
-TEMP_DIR.mkdir(exist_ok=True)
-
 @app.post("/process-voice/")
-async def process_voice(audio_file: UploadFile = File(...)):
+async def process_voice(audio_data: dict = Body(...)):
     """
-    Process voice input:
-    1. Save uploaded audio
-    2. Convert to text
+    Process voice input in base64 bytes format:
+    1. Decode base64 audio to bytes
+    2. Convert speech bytes to text
     3. Convert text back to speech
-    4. Return audio response
+    4. Return both text and audio response
     """
-    temp_input = None
-    temp_output = None
-    
     try:
-        # Save uploaded file temporarily
-        temp_input = TEMP_DIR / f"input_{audio_file.filename}"
-        content = await audio_file.read()
+        # Decode base64 audio data to bytes
+        if 'audio_bytes' not in audio_data:
+            raise HTTPException(status_code=400, detail="No audio data provided")
+            
+        input_audio_bytes = base64.b64decode(audio_data['audio_bytes'])
         
-        # Ensure temp_input is a string when writing
-        with open(str(temp_input), "wb") as f:
-            f.write(content)
-
-        # Convert speech to text - pass as string
-        text = speech_to_text(str(temp_input))
+        # Convert speech bytes to text
+        text = speech_to_text(input_audio_bytes)
         print(f"Transcribed text: {text}")
-
-        # Convert text to speech
-        temp_output = TEMP_DIR / "response.wav"
-        # Ensure output path is a string
-        text_to_speech(text, str(temp_output))
-
-        # Wait to ensure file is written
-        if not temp_output.exists():
-            raise FileNotFoundError("Response audio file was not created")
-        # Return the audio file as bytes
-        encoded_audio = base64.b64encode(temp_output.read_bytes()).decode('utf-8')
-        # Create response
-        return {"message": "Audio processed successfully", "text": text, "audio_data": encoded_audio}
-    
-    except FileNotFoundError as fnf_error:
-        print(f"File not found error: {fnf_error}")
-        return {"error": "File not found", "details": str(fnf_error)}
+        
+        # Convert text back to speech and handle binary response
+        response_audio_bytes = text_to_speech(text)
+        if not isinstance(response_audio_bytes, bytes):
+            raise ValueError("Text-to-speech failed to return audio bytes")
+            
+        response_audio_base64 = base64.b64encode(response_audio_bytes).decode('utf-8')
+        
+        return JSONResponse({
+            "message": "Audio processed successfully",
+            "text": text,
+            "audio_bytes": response_audio_base64
+        })
 
     except Exception as e:
         print(f"Error in process_voice: {str(e)}")
-        return {"error": str(e)}
-
-    finally:
-        # Cleanup temporary files
-        try:
-            if temp_input and Path(temp_input).exists():
-                os.unlink(str(temp_input))
-            if temp_output and Path(temp_output).exists():
-                os.unlink(str(temp_output))
-        except Exception as cleanup_error:
-            print(f"Error during cleanup: {cleanup_error}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)}
+        )
 
 @app.get("/")
 async def root():
