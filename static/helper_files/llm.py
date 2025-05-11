@@ -7,9 +7,16 @@ from pathlib import Path
 from groq import Groq
 from dotenv import load_dotenv, find_dotenv
 import io
+from google import genai
+from google.genai import types
+from typing import List
+from prompts import *
 
 _ = find_dotenv()
 _ = load_dotenv()
+
+# Initialize Gemini client
+genai_client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
 def speech_to_text(audio_bytes: bytes) -> str:
     """
@@ -108,21 +115,57 @@ def play_audio(audio_data: bytes):
     # Clean up the temporary file
     os.unlink(temp_filename)
 
-def main():
+def generate_followup_questions(conversation_text: str, system_prompt: str = None) -> List[str]:
+    """
+    Generate follow-up questions based on the conversation using Gemini
+    Args:
+        conversation_text: The text from speech-to-text conversion
+        system_prompt: Optional system prompt to guide the model's behavior
+    Returns:
+        List[str]: List of follow-up questions
+    """
     try:
-        # Step 1: Convert speech to text
-        print("Listening... Speak now!")
-        audio_data = record_audio(duration=5)
-        text = speech_to_text(audio_data)
-        print(f"You said: {text}")
+        model = "gemini-2.5-pro-preview-05-06"
         
-        # Step 2: Convert text back to speech and play it
-        print("Playing response...")
-        speech_audio = text_to_speech(text)
-        play_audio(speech_audio)
+        # Default system prompt if none provided
+        if not system_prompt:
+            system_prompt = QUESTION_GENERATION_PROMPT_B2B
         
+        # Prepare the content
+        contents = [
+            types.Content(
+                role="user",
+                parts=[
+                    types.Part.from_text(
+                        text=f"system instrcution:{system_prompt}\n\nPatient's response: {conversation_text}"
+                    ),
+                ],
+            ),
+        ]
+        
+        # Configure generation parameters
+        generate_config = types.GenerateContentConfig(
+            response_mime_type="text/plain",
+        )
+        
+        # Generate response
+        response = ""
+        for chunk in genai_client.models.generate_content_stream(
+            model=model,
+            contents=contents,
+            config=generate_config,
+        ):
+            response += chunk.text
+        
+        # Parse response into list of questions
+        questions = [q.strip() for q in response.split('\n') if q.strip() and q[0].isdigit()]
+        
+        return questions[:3]  # Ensure we return exactly 3 questions
+
     except Exception as e:
-        print(f"An error occurred: {str(e)}")
+        print(f"Error generating follow-up questions: {e}")
+        return ["Could not generate follow-up questions."]
+
 
 def record_audio(duration=5):
     """Record audio and return as bytes"""
@@ -149,6 +192,3 @@ def record_audio(duration=5):
         p.terminate()
 
     return b''.join(frames)
-
-if __name__ == "__main__":
-    main()
