@@ -11,12 +11,15 @@ from google import genai
 from google.genai import types
 from typing import List
 from prompts import *
+from functions import *
 
 _ = find_dotenv()
 _ = load_dotenv()
 
 # Initialize Gemini client
 genai_client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+
+
 
 def speech_to_text(audio_bytes: bytes) -> str:
     """
@@ -115,7 +118,7 @@ def play_audio(audio_data: bytes):
     # Clean up the temporary file
     os.unlink(temp_filename)
 
-def generate_followup_questions(conversation_text: str, system_prompt: str = None) -> List[str]:
+def generate_followup_questions(conversation_text: str) -> List[str]:
     """
     Generate follow-up questions based on the conversation using Gemini
     Args:
@@ -128,8 +131,8 @@ def generate_followup_questions(conversation_text: str, system_prompt: str = Non
         model = "gemini-2.5-pro-preview-05-06"
         
         # Default system prompt if none provided
-        if not system_prompt:
-            system_prompt = QUESTION_GENERATION_PROMPT_B2B
+        
+        system_prompt = QUESTION_GENERATION_PROMPT_B2B
         
         # Prepare the content
         contents = [
@@ -137,7 +140,7 @@ def generate_followup_questions(conversation_text: str, system_prompt: str = Non
                 role="user",
                 parts=[
                     types.Part.from_text(
-                        text=f"system instrcution:{system_prompt}\n\nPatient's response: {conversation_text}"
+                        text=f"system instrcution:{system_prompt}\n\nQuestion:{conversation_text['Assistant']}\n\nPatient's response: {conversation_text['user']}"
                     ),
                 ],
             ),
@@ -157,15 +160,154 @@ def generate_followup_questions(conversation_text: str, system_prompt: str = Non
         ):
             response += chunk.text
         
+        parsed_response = parse_text_to_json(response)
+        if "error" in parsed_response:
+            raise ValueError(f"Error in response: {parsed_response['error']}")
         # Parse response into list of questions
-        questions = [q.strip() for q in response.split('\n') if q.strip() and q[0].isdigit()]
+        questions = ''
+        for question in parsed_response['content']:
+            questions += question['text'].strip('\n\t ') + '       '
         
-        return questions[:3]  # Ensure we return exactly 3 questions
+        return questions  
 
     except Exception as e:
         print(f"Error generating follow-up questions: {e}")
         return ["Could not generate follow-up questions."]
+    
 
+def generate_greeting(patient_info: dict) -> str:
+    """
+    Generate a personalized greeting for the patient
+    Args:
+        patient_info: Dictionary containing patient information
+    Returns:
+        str: Personalized greeting and initial question
+    """
+    try:
+        model = "gemini-2.5-pro-preview-05-06"
+        
+        # Prepare the content
+        contents = [
+            types.Content(
+                role="user",
+                parts=[
+                    types.Part.from_text(
+                        text=f"system instruction:{GREETINGS_PROMPT}\n\nPatient Information: {patient_info}"
+                    ),
+                ],
+            ),
+        ]
+        
+        # Configure generation parameters
+        generate_config = types.GenerateContentConfig(
+            response_mime_type="text/plain",
+        )
+        
+        # Generate response
+        response = ""
+        for chunk in genai_client.models.generate_content_stream(
+            model=model,
+            contents=contents,
+            config=generate_config,
+        ):
+            response += chunk.text
+        
+        parsed_response = parse_text_to_json(response)
+        if "error" in parsed_response:
+            raise ValueError(f"Error in response: {parsed_response['error']}")
+            
+        return parsed_response['content']
+
+    except Exception as e:
+        print(f"Error generating greeting: {e}")
+        return "Welcome to MedConscious. How can I help you today?"
+
+def generate_differential_diagnosis(patient_data: dict) -> str:
+    """
+    Generate differential diagnosis based on patient data
+    Args:
+        patient_data: Dictionary containing patient symptoms and history
+    Returns:
+        str: Detailed differential diagnosis in markdown format
+    """
+    try:
+        model = "gemini-2.5-pro-preview-05-06"
+        
+        # Prepare the content
+        contents = [
+            types.Content(
+                role="user",
+                parts=[
+                    types.Part.from_text(
+                        text=f"system instruction:{DIFFERENTIAL_DIAGONOSIS_GENERATION_PROMPT}\n\nPatient Data: {patient_data}"
+                    ),
+                ],
+            ),
+        ]
+        
+        # Configure generation parameters
+        generate_config = types.GenerateContentConfig(
+            response_mime_type="text/plain",
+        )
+        
+        # Generate response
+        response = ""
+        for chunk in genai_client.models.generate_content_stream(
+            model=model,
+            contents=contents,
+            config=generate_config,
+        ):
+            response += chunk.text
+        
+        return response
+
+    except Exception as e:
+        print(f"Error generating differential diagnosis: {e}")
+        return "Unable to generate differential diagnosis at this time."
+
+def generate_medical_report(conversation_history: List[dict], patient_data: dict) -> str:
+    """
+    Generate a comprehensive medical report
+    Args:
+        conversation_history: List of conversation exchanges
+        patient_data: Dictionary containing patient information
+    Returns:
+        str: Medical report in markdown format
+    """
+    try:
+        model = "gemini-2.5-pro-preview-05-06"
+        
+        # Prepare the content
+        contents = [
+            types.Content(
+                role="user",
+                parts=[
+                    types.Part.from_text(
+                        text=f"system instruction:{REPORT_GENERATION_PROMPT}\n\nConversation History: {conversation_history}\n\nPatient Data: {patient_data}"
+                    ),
+                ],
+            ),
+        ]
+        
+        # Configure generation parameters
+        generate_config = types.GenerateContentConfig(
+            response_mime_type="text/plain",
+        )
+        
+        # Generate response
+        response = ""
+        for chunk in genai_client.models.generate_content_stream(
+            model=model,
+            contents=contents,
+            config=generate_config,
+        ):
+            response += chunk.text
+        
+        return response
+
+    except Exception as e:
+        print(f"Error generating medical report: {e}")
+        return "Unable to generate medical report at this time."
 
 def record_audio(duration=5):
     """Record audio and return as bytes"""
