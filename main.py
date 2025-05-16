@@ -1,9 +1,10 @@
-from fastapi import FastAPI, Body, HTTPException
+from fastapi import FastAPI, Body, HTTPException,BackgroundTasks
 from fastapi.responses import JSONResponse
 import uvicorn
 import base64
 from dotenv import load_dotenv, find_dotenv
 from static.helper_files.llm import speech_to_text, text_to_speech
+
 
 app = FastAPI(
     title="MedConscious AI",
@@ -12,7 +13,7 @@ app = FastAPI(
 )
 
 @app.post("/process-voice/")
-async def process_voice(audio_data: dict = Body(...)):
+async def process_voice(audio_data: dict = Body(...),background_tasks: BackgroundTasks = BackgroundTasks()):
     """
     Process voice input in base64 bytes format:
     1. Decode base64 audio to bytes
