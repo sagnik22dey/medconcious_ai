@@ -1,10 +1,17 @@
-from fastapi import FastAPI, Body, HTTPException,BackgroundTasks
+from fastapi import FastAPI, Body, HTTPException
 from fastapi.responses import JSONResponse
 import uvicorn
 import base64
+from typing import List, Dict
 from dotenv import load_dotenv, find_dotenv
-from static.helper_files.llm import speech_to_text, text_to_speech
-
+from static.helper_files.llm import (
+    speech_to_text, 
+    text_to_speech, 
+    generate_greeting,
+    generate_followup_questions,
+    generate_differential_diagnosis,
+    generate_medical_report
+)
 
 app = FastAPI(
     title="MedConscious AI",
@@ -12,50 +19,172 @@ app = FastAPI(
     version="1.0.0"
 )
 
-@app.post("/process-voice/")
-async def process_voice(audio_data: dict = Body(...),background_tasks: BackgroundTasks = BackgroundTasks()):
+# Store conversation history
+conversation_history = []
+
+@app.post("/initiate-chat/")
+async def initiate_chat(patient_info: dict = Body(...)):
     """
-    Process voice input in base64 bytes format:
-    1. Decode base64 audio to bytes
-    2. Convert speech bytes to text
-    3. Convert text back to speech
-    4. Return both text and audio response
+    Initialize chat with patient greeting
     """
     try:
-        # Decode base64 audio data to bytes
-        if 'audio_bytes' not in audio_data:
-            raise HTTPException(status_code=400, detail="No audio data provided")
-            
-        input_audio_bytes = base64.b64decode(audio_data['audio_bytes'])
+        # Generate greeting using patient info
+        greeting_text = generate_greeting(patient_info)
         
-        # Convert speech bytes to text
-        text = speech_to_text(input_audio_bytes)
-        print(f"Transcribed text: {text}")
-        
-        # Convert text back to speech and handle binary response
-        response_audio_bytes = text_to_speech(text)
-        if not isinstance(response_audio_bytes, bytes):
-            raise ValueError("Text-to-speech failed to return audio bytes")
-            
-        response_audio_base64 = base64.b64encode(response_audio_bytes).decode('utf-8')
+        # Convert greeting to speech
+        greeting_audio = text_to_speech(greeting_text)
+        greeting_audio_base64 = base64.b64encode(greeting_audio).decode('utf-8')
         
         return JSONResponse({
-            "message": "Audio processed successfully",
-            "text": text,
-            "audio_bytes": response_audio_base64
+            "message": "Greeting generated successfully",
+            "text": greeting_text,
+            "audio_bytes": greeting_audio_base64
         })
 
     except Exception as e:
-        print(f"Error in process_voice: {str(e)}")
+        print(f"Error in initiate_chat: {str(e)}")
         return JSONResponse(
             status_code=500,
             content={"error": str(e)}
         )
 
-@app.get("/")
-async def root():
-    """Health check endpoint"""
-    return {"status": "healthy", "message": "Voice processing server is running"}
+@app.post("/process-response/")
+async def process_response(request_data: dict = Body(...)):
+    """
+    Process patient response and generate follow-up questions
+    """
+    try:
+        # Decode audio to text
+        audio_bytes = base64.b64decode(request_data['audio_bytes'])
+        patient_response = speech_to_text(audio_bytes)
+        
+        # Update conversation history
+        conversation_history.append({
+            "role": "user",
+            "content": patient_response,
+            "user_info": request_data.get('user_info', {})
+        })
+        
+        # Generate follow-up questions
+        questions = generate_followup_questions({
+            "Assistant": request_data.get('previous_question', ''),
+            "user": patient_response
+        })
+        
+        # Convert questions to speech
+        questions_audio = text_to_speech(questions)
+        questions_audio_base64 = base64.b64encode(questions_audio).decode('utf-8')
+        
+        return JSONResponse({
+            "message": "Response processed successfully",
+            "user_text": patient_response,
+            "questions": questions,
+            "audio_bytes": questions_audio_base64
+        })
+
+    except Exception as e:
+        print(f"Error in process_response: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)}
+        )
+
+@app.post("/generate-diagnosis/")
+async def generate_diagnosis(request_data: dict = Body(...)):
+    """
+    Generate differential diagnosis based on patient responses
+    """
+    try:
+        # Decode audio to text
+        audio_bytes = base64.b64decode(request_data['audio_bytes'])
+        patient_response = speech_to_text(audio_bytes)
+        
+        # Update conversation history
+        conversation_history.append({
+            "role": "user",
+            "content": patient_response
+        })
+        
+        # Generate differential diagnosis
+        diagnosis = generate_differential_diagnosis({
+            "symptoms": patient_response,
+            "history": conversation_history,
+            "previous_questions": request_data.get('previous_questions', '')
+        })
+        
+        # Convert diagnosis to speech
+        diagnosis_audio = text_to_speech(diagnosis)
+        diagnosis_audio_base64 = base64.b64encode(diagnosis_audio).decode('utf-8')
+        
+        return JSONResponse({
+            "message": "Diagnosis generated successfully",
+            "user_text": patient_response,
+            "diagnosis": diagnosis,
+            "audio_bytes": diagnosis_audio_base64
+        })
+
+    except Exception as e:
+        print(f"Error in generate_diagnosis: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)}
+        )
+
+@app.post("/generate-prescription/")
+async def generate_prescription(request_data: dict = Body(...)):
+    """
+    Generate prescription based on chosen diagnosis
+    """
+    try:
+        # Generate medical report
+        prescription = generate_medical_report(
+            conversation_history=conversation_history,
+            patient_data={
+                "chosen_diagnosis": request_data.get('chosen_diagnosis'),
+                "patient_info": request_data.get('patient_info', {})
+            }
+        )
+        
+        return JSONResponse({
+            "message": "Prescription generated successfully",
+            "prescription": prescription
+        })
+
+    except Exception as e:
+        print(f"Error in generate_prescription: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)}
+        )
+
+@app.post("/generate-report/")
+async def generate_report(request_data: dict = Body(...)):
+    """
+    Generate markdown report for PDF conversion
+    """
+    try:
+        # Generate detailed markdown report
+        report = generate_medical_report(
+            conversation_history=conversation_history,
+            patient_data={
+                "diagnosis": request_data.get('diagnosis'),
+                "prescription": request_data.get('prescription'),
+                "patient_info": request_data.get('patient_info', {}),
+                "doctor_info": request_data.get('doctor_info', {})
+            }
+        )
+        
+        return JSONResponse({
+            "message": "Report generated successfully",
+            "markdown_content": report
+        })
+
+    except Exception as e:
+        print(f"Error in generate_report: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)}
+        )
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
