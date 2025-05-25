@@ -88,27 +88,24 @@ def text_to_speech(text: str) -> bytes:
         print(f"Error in text to speech conversion: {e}")
         raise
 
-def generate_greeting(
-    patient_info: dict, 
-    custom_model_fn: Optional[Callable] = None
-) -> str:
+def generate_greeting(patient_info: dict) -> str:
     """
-    Generate personalized greeting
+    Generate personalized greeting using patient info
     Args:
-        patient_info: Dict with name and other patient details
-        custom_model_fn: Optional custom model function
+        patient_info: Dict containing User_Info with name and email
     Returns:
         str: Generated greeting text
     """
     try:
-        prompt = f"system instruction:{GREETINGS_PROMPT}\n\nPatient Information: {patient_info}"
+        # Extract user info
+        user_info = patient_info.get("User_Info", {})
+        name = user_info.get("name", "")
         
-        response = generate_llm_response(
-            prompt=prompt,
-            custom_model_fn=custom_model_fn
-        )
+        prompt = f"system instruction:{GREETINGS_PROMPT}\n\nPatient Information: {user_info}"
         
+        response = generate_llm_response(prompt=prompt)
         parsed = parse_text_to_json(response)
+        
         if "error" in parsed:
             raise ValueError(f"Error in response: {parsed['error']}")
             
@@ -118,31 +115,25 @@ def generate_greeting(
         print(f"Error generating greeting: {e}")
         raise
 
-def generate_followup_questions(
-    conversation_context: dict,
-    custom_model_fn: Optional[Callable] = None
-) -> str:
+def generate_followup_questions(conversation_context: dict) -> str:
     """
-    Generate follow-up questions based on conversation
+    Generate follow-up questions based on previous interaction
     Args:
-        conversation_context: Dict with previous question and user response
-        custom_model_fn: Optional custom model function
+        conversation_context: Dict with previous_question and user response
     Returns:
         str: Generated questions
     """
     try:
+        # Format conversation context
         prompt = (
             f"system instruction:{QUESTION_GENERATION_PROMPT_B2B}\n\n"
-            f"Question:{conversation_context['Assistant']}\n\n"
-            f"Patient's response: {conversation_context['user']}"
+            f"Previous Question: {conversation_context['Assistant']}\n"
+            f"Patient's Response: {conversation_context['user']}"
         )
         
-        response = generate_llm_response(
-            prompt=prompt,
-            custom_model_fn=custom_model_fn
-        )
-        
+        response = generate_llm_response(prompt=prompt)
         parsed = parse_text_to_json(response)
+        
         if "error" in parsed:
             raise ValueError(f"Error in response: {parsed['error']}")
             
@@ -154,32 +145,27 @@ def generate_followup_questions(
 
 def generate_differential_diagnosis(patient_data: dict) -> str:
     """
-    Generate differential diagnosis
+    Generate differential diagnosis based on patient data
     Args:
-        patient_data: Dict with symptoms, history, and previous questions
+        patient_data: Dict containing symptoms, history and previous questions
     Returns:
         str: Markdown formatted differential diagnosis
     """
     try:
-        model = "gemini-2.5-pro-preview-05-06"
-        contents = [
-            types.Content(
-                role="user",
-                parts=[types.Part.from_text(
-                    text=f"system instruction:{DIFFERENTIAL_DIAGONOSIS_GENERATION_PROMPT}\n\n"
-                         f"Patient Data: {patient_data}"
-                )],
-            ),
-        ]
+        # Format patient data
+        formatted_data = {
+            "symptoms": patient_data.get("symptoms", ""),
+            "conversation_history": patient_data.get("history", []),
+            "previous_questions": patient_data.get("previous_questions", ""),
+            "patient_info": patient_data.get("Patient_Info", {})
+        }
         
-        response = ""
-        for chunk in genai_client.models.generate_content_stream(
-            model=model,
-            contents=contents,
-            config=types.GenerateContentConfig(response_mime_type="text/plain")
-        ):
-            response += chunk.text
+        prompt = (
+            f"system instruction:{DIFFERENTIAL_DIAGONOSIS_GENERATION_PROMPT}\n\n"
+            f"Patient Data: {formatted_data}"
+        )
         
+        response = generate_llm_response(prompt=prompt)
         return response
 
     except Exception as e:
@@ -188,34 +174,29 @@ def generate_differential_diagnosis(patient_data: dict) -> str:
 
 def generate_medical_report(conversation_history: List[dict], patient_data: dict) -> str:
     """
-    Generate medical report
+    Generate medical report including prescription
     Args:
         conversation_history: List of conversation exchanges
-        patient_data: Dict with diagnosis and patient info
+        patient_data: Dict with diagnosis, prescription and patient/doctor info
     Returns:
         str: Markdown formatted medical report
     """
     try:
-        model = "gemini-2.5-pro-preview-05-06"
-        contents = [
-            types.Content(
-                role="user",
-                parts=[types.Part.from_text(
-                    text=f"system instruction:{REPORT_GENERATION_PROMPT}\n\n"
-                         f"Conversation History: {conversation_history}\n\n"
-                         f"Patient Data: {patient_data}"
-                )],
-            ),
-        ]
+        # Format report data
+        report_data = {
+            "conversation_history": conversation_history,
+            "patient_info": patient_data.get("patient_info", {}),
+            "doctor_info": patient_data.get("doctor_info", {}),
+            "diagnosis": patient_data.get("diagnosis", ""),
+            "prescription": patient_data.get("prescription", "")
+        }
         
-        response = ""
-        for chunk in genai_client.models.generate_content_stream(
-            model=model,
-            contents=contents,
-            config=types.GenerateContentConfig(response_mime_type="text/plain")
-        ):
-            response += chunk.text
+        prompt = (
+            f"system instruction:{REPORT_GENERATION_PROMPT}\n\n"
+            f"Report Data: {report_data}"
+        )
         
+        response = generate_llm_response(prompt=prompt)
         return response
 
     except Exception as e:

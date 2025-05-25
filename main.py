@@ -26,6 +26,14 @@ conversation_history = []
 async def initiate_chat(patient_info: dict = Body(...)):
     """
     Initialize chat with patient greeting
+    
+    Payload initiate-chat:
+    {
+        "User_Info": {
+            "name": "John Doe",
+            "email": "abc@xyz.com"
+            }
+    }
     """
     try:
         # Generate greeting using patient info
@@ -52,6 +60,16 @@ async def initiate_chat(patient_info: dict = Body(...)):
 async def process_response(request_data: dict = Body(...)):
     """
     Process patient response and generate follow-up questions
+    
+    Payload process-response:
+    {
+        "audio_bytes": "<base64_encoded_audio>",
+        "previous_question": "Give me the patient Name, Age, Gender and Symptoms",
+        "user_info": {
+            "name": "John Doe",
+            "email":"abc@xyz.com"
+            }
+    }
     """
     try:
         # Decode audio to text
@@ -93,6 +111,23 @@ async def process_response(request_data: dict = Body(...)):
 async def generate_diagnosis(request_data: dict = Body(...)):
     """
     Generate differential diagnosis based on patient responses
+    
+    Payload generate-diagnosis:
+    {
+        "audio_bytes": "<base64_encoded_audio>",
+        "previous_questions": "Follow-up questions",
+        "Patient_Info": {
+            "name": "John Doe",
+            "age": 30,
+            "gender":"male",
+            "symptoms": "fever, cough",
+            "medical_history": "No known allergies"
+        },
+        "user_info": {
+            "name": "John Doe",
+            "email":"abc@xyz.com"
+        }  
+    }
     """
     try:
         # Decode audio to text
@@ -134,6 +169,25 @@ async def generate_diagnosis(request_data: dict = Body(...)):
 async def generate_prescription(request_data: dict = Body(...)):
     """
     Generate prescription based on chosen diagnosis
+    
+    payload generate-prescription:
+    {   
+        "user_info": {
+            "name": "John Doe",
+            "email":"abc@xyz.com"
+        },
+        "Patient_Info": {
+            "name": "John Doe",
+            "age": 30,
+            "gender":"male",
+            "symptoms": "fever, cough",
+            "medical_history": "No known allergies"
+        },
+        "follow_up_questions": "Follow-up questions",
+        "answer": "Patient response",
+        "chosen_diagnosis": "Diagnosis",
+    }
+            
     """
     try:
         # Generate medical report
@@ -161,7 +215,25 @@ async def generate_prescription(request_data: dict = Body(...)):
 async def generate_report(request_data: dict = Body(...)):
     """
     Generate markdown report for PDF conversion
+
+    payload generate-report:
+    {   
+        "user_info": {
+            "name": "John Doe",
+            "email":"abc@xyz.com"
+        },
+        "Patient_Info": {
+            "name": "John Doe",
+            "age": 30,
+            "gender":"male",
+            "symptoms": "fever, cough",
+            "medical_history": "No known allergies"
+        },
+        "prescription": "Prescription"
+    }
+            
     """
+
     try:
         # Generate detailed markdown report
         report = generate_medical_report(
