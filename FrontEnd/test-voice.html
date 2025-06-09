@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Voice Recording Test - MedConscious</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        background-color: #141414;
+        color: white;
+        padding: 20px;
+        text-align: center;
+      }
+      button {
+        background-color: #007bff;
+        color: white;
+        border: none;
+        padding: 15px 30px;
+        font-size: 16px;
+        border-radius: 8px;
+        margin: 10px;
+        cursor: pointer;
+      }
+      button:hover {
+        background-color: #0056b3;
+      }
+      button:disabled {
+        background-color: #555;
+        cursor: not-allowed;
+      }
+      .recording {
+        background-color: #dc3545 !important;
+      }
+      .status {
+        margin: 20px 0;
+        padding: 15px;
+        background-color: #2a2a2a;
+        border-radius: 8px;
+        min-height: 50px;
+      }
+      .transcript {
+        background-color: #333;
+        padding: 15px;
+        border-radius: 8px;
+        margin: 10px 0;
+        min-height: 40px;
+      }
+      .audio-info {
+        color: #ababab;
+        font-size: 14px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>MedConscious Voice Test</h1>
+
+    <div class="status">
+      <p id="status">Click "Request Permissions" to start</p>
+    </div>
+
+    <button id="permissionBtn" onclick="requestPermissions()">
+      Request Permissions
+    </button>
+    <button id="recordBtn" onclick="toggleRecording()" disabled>
+      Start Recording
+    </button>
+    <button id="speakBtn" onclick="testSpeech()" disabled>Test Speech</button>
+
+    <div class="transcript">
+      <strong>Recognized Text:</strong>
+      <p id="transcript">No speech recognized yet</p>
+    </div>
+
+    <div class="audio-info">
+      <p id="audioInfo">No audio recorded yet</p>
+    </div>
+
+    <script>
+      let mediaRecorder = null;
+      let recognition = null;
+      let isRecording = false;
+      let audioChunks = [];
+      let audioData = null;
+
+      const statusEl = document.getElementById("status");
+      const permissionBtn = document.getElementById("permissionBtn");
+      const recordBtn = document.getElementById("recordBtn");
+      const speakBtn = document.getElementById("speakBtn");
+      const transcriptEl = document.getElementById("transcript");
+      const audioInfoEl = document.getElementById("audioInfo");
+
+      function updateStatus(message) {
+        statusEl.textContent = message;
+        console.log("Status:", message);
+      }
+
+      async function requestPermissions() {
+        try {
+          updateStatus("Requesting microphone permissions...");
+
+          // Request microphone access
+          const stream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+              sampleRate: 44100,
+              channelCount: 1,
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true,
+            },
+          });
+
+          // Test MediaRecorder
+          const mediaRecorderSupported =
+            typeof MediaRecorder !== "undefined" &&
+            MediaRecorder.isTypeSupported("audio/webm;codecs=opus");
+          console.log("MediaRecorder supported:", mediaRecorderSupported);
+
+          // Test Speech Recognition
+          const speechSupported =
+            typeof window !== "undefined" &&
+            (window.webkitSpeechRecognition || window.SpeechRecognition);
+          console.log("Speech Recognition supported:", speechSupported);
+
+          // Test Text to Speech
+          const speechSynthesisSupported =
+            typeof speechSynthesis !== "undefined";
+          console.log("Speech Synthesis supported:", speechSynthesisSupported);
+
+          stream.getTracks().forEach((track) => track.stop());
+
+          updateStatus(
+            `Permissions granted! MediaRecorder: ${mediaRecorderSupported}, Speech Recognition: ${speechSupported}, Text-to-Speech: ${speechSynthesisSupported}`
+          );
+
+          recordBtn.disabled = false;
+          speakBtn.disabled = false;
+          permissionBtn.disabled = true;
+        } catch (error) {
+          console.error("Permission error:", error);
+          updateStatus("Permission denied: " + error.message);
+        }
+      }
+
+      async function startRecording() {
+        try {
+          updateStatus("Starting recording...");
+          audioChunks = [];
+
+          // Start audio recording
+          const stream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+              sampleRate: 44100,
+              channelCount: 1,
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true,
+            },
+          });
+
+          let mimeType = "audio/webm;codecs=opus";
+          if (!MediaRecorder.isTypeSupported(mimeType)) {
+            mimeType = "audio/webm";
+            if (!MediaRecorder.isTypeSupported(mimeType)) {
+              mimeType = "audio/mp4";
+              if (!MediaRecorder.isTypeSupported(mimeType)) {
+                mimeType = "";
+              }
+            }
+          }
+
+          mediaRecorder = new MediaRecorder(
+            stream,
+            mimeType ? { mimeType } : undefined
+          );
+
+          mediaRecorder.ondataavailable = (event) => {
+            if (event.data.size > 0) {
+              audioChunks.push(event.data);
+              console.log("Audio chunk received:", event.data.size, "bytes");
+            }
+          };
+
+          mediaRecorder.onstop = async () => {
+            console.log("MediaRecorder stopped");
+            const audioBlob = new Blob(audioChunks, {
+              type: mimeType || "audio/webm",
+            });
+            const arrayBuffer = await audioBlob.arrayBuffer();
+            audioData = new Uint8Array(arrayBuffer);
+            audioInfoEl.textContent = `Audio recorded: ${(
+              audioData.length / 1024
+            ).toFixed(1)} KB`;
+
+            stream.getTracks().forEach((track) => track.stop());
+          };
+
+          mediaRecorder.start(100);
+
+          // Start speech recognition
+          if (window.webkitSpeechRecognition || window.SpeechRecognition) {
+            const SpeechRecognition =
+              window.webkitSpeechRecognition || window.SpeechRecognition;
+            recognition = new SpeechRecognition();
+            recognition.continuous = false;
+            recognition.interimResults = false;
+            recognition.lang = "en-US";
+
+            recognition.onresult = (event) => {
+              const result = event.results[event.results.length - 1];
+              if (result.isFinal) {
+                const transcript = result[0].transcript.trim();
+                transcriptEl.textContent = transcript;
+                updateStatus("Speech recognized successfully!");
+              }
+            };
+
+            recognition.onerror = (event) => {
+              console.error("Speech recognition error:", event.error);
+              updateStatus("Speech recognition error: " + event.error);
+            };
+
+            recognition.onend = () => {
+              console.log("Speech recognition ended");
+            };
+
+            recognition.start();
+          }
+
+          updateStatus("Recording... Speak now!");
+        } catch (error) {
+          console.error("Recording error:", error);
+          updateStatus("Recording failed: " + error.message);
+        }
+      }
+
+      function stopRecording() {
+        try {
+          updateStatus("Stopping recording...");
+
+          if (mediaRecorder && mediaRecorder.state !== "inactive") {
+            mediaRecorder.stop();
+          }
+
+          if (recognition) {
+            recognition.stop();
+          }
+
+          updateStatus("Recording stopped");
+        } catch (error) {
+          console.error("Stop recording error:", error);
+          updateStatus("Error stopping recording: " + error.message);
+        }
+      }
+
+      function toggleRecording() {
+        if (isRecording) {
+          stopRecording();
+          recordBtn.textContent = "Start Recording";
+          recordBtn.classList.remove("recording");
+          isRecording = false;
+        } else {
+          startRecording();
+          recordBtn.textContent = "Stop Recording";
+          recordBtn.classList.add("recording");
+          isRecording = true;
+        }
+      }
+
+      function testSpeech() {
+        const text =
+          "Hello! This is a test of the text to speech functionality. If you can hear this, the speech synthesis is working correctly.";
+
+        if (typeof speechSynthesis !== "undefined") {
+          const utterance = new SpeechSynthesisUtterance(text);
+          utterance.lang = "en-US";
+          utterance.pitch = 1.0;
+          utterance.rate = 0.8;
+
+          utterance.onstart = () => {
+            updateStatus("Speaking...");
+          };
+
+          utterance.onend = () => {
+            updateStatus("Speech synthesis completed");
+          };
+
+          utterance.onerror = (event) => {
+            updateStatus("Speech synthesis error: " + event.error);
+          };
+
+          speechSynthesis.speak(utterance);
+        } else {
+          updateStatus("Speech synthesis not supported");
+        }
+      }
+    </script>
+  </body>
+</html>
