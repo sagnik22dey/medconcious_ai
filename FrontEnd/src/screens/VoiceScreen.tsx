@@ -78,11 +78,11 @@ export function VoiceScreen() {
       const previousQuestionFromState =
         state.messages.filter((msg) => msg.sender === "ai").pop()?.text ||
         "Give me the patient Name, Age, Gender and Symptoms";
-      const userInfoFromState = { name: "John Doe", email: "abc@xyz.com" };
+      const userInfoFromState = { name: "John Doe", email: "john.doe@example.com" }; // Standardized email
 
       const serverPayload = {
         audio_bytes: audioInfo.base64,
-        // audio_format: audioInfo.mimeType || 'audio/m4a', // Send mimeType if your server needs it
+        audio_format: audioInfo.mimeType || 'audio/m4a',
         previous_question: previousQuestionFromState,
         user_info: userInfoFromState,
       };
@@ -94,8 +94,8 @@ export function VoiceScreen() {
 
       // Backend URL - using localhost for development
       const YOUR_BACKEND_BASE_URL = Platform.OS === 'android'
-        ? "http://192.168.0.114:8000"  // Android emulator localhost
-        : "http://192.168.0.114:8000"; // iOS simulator and web
+        ? "http://192.168.153.125:8000"  // Android emulator localhost
+        : "http://192.168.153.125:8000"; // iOS simulator and web
       const endpoint = `${YOUR_BACKEND_BASE_URL}/process-response/`;
 
       setIsLoading(true);

@@ -20,12 +20,12 @@ app = FastAPI(
 )
 
 # Store conversation history
-conversation_history = []
+conversation_history: List[Dict] = []
 
 @app.post("/initiate-chat/")
-async def initiate_chat(patient_info: dict = Body(...)):
+async def initiate_chat(patient_info_payload: dict = Body(...)):
     """
-    Initialize chat with patient greeting
+    Initialize chat with patient greeting and clear previous history.
     
     Payload initiate-chat:
     {
@@ -35,18 +35,28 @@ async def initiate_chat(patient_info: dict = Body(...)):
             }
     }
     """
+    global conversation_history
     try:
-        # Generate greeting using patient info
-        greeting_text = generate_greeting(patient_info)
+        conversation_history.clear() # Clear history for a new chat session
+        
+        user_info = patient_info_payload.get("User_Info", {})
+        greeting_text = generate_greeting(user_info) # Pass user_info
         
         # Convert greeting to speech
-        greeting_audio = text_to_speech(greeting_text)
-        greeting_audio_base64 = base64.b64encode(greeting_audio).decode('utf-8')
+        # greeting_audio = text_to_speech(greeting_text)
+        # greeting_audio_base64 = base64.b64encode(greeting_audio).decode('utf-8')
+        
+        # Add AI's greeting to history
+        conversation_history.append({
+            "role": "assistant",
+            "content": greeting_text,
+            # "user_info": user_info # user_info associated with the assistant's greeting context
+        })
         
         return JSONResponse({
-            "message": "Greeting generated successfully",
-            "text": greeting_text,
-            "audio_bytes": greeting_audio_base64
+            "message": "Greeting generated successfully. Conversation history cleared.",
+            "text": greeting_text
+            # "audio_bytes": greeting_audio_base64
         })
 
     except Exception as e:
@@ -66,52 +76,119 @@ async def health_check():
 @app.post("/process-response/")
 async def process_response(request_data: dict = Body(...)):
     """
-    Process patient response and generate follow-up questions
+    Process patient response, generate follow-up questions, or
+    generate diagnosis and report if all information is gathered.
     
     Payload process-response:
     {
         "audio_bytes": "<base64_encoded_audio>",
         "previous_question": "Give me the patient Name, Age, Gender and Symptoms",
-        "user_info": {
+        "user_info": { # Basic identification info
             "name": "John Doe",
             "email":"abc@xyz.com"
             }
     }
     """
+    global conversation_history
     try:
-        # Decode audio to text
-        audio_bytes = base64.b64decode(request_data['audio_bytes'])
-        patient_response = speech_to_text(audio_bytes)
+        audio_bytes_b64 = request_data['audio_bytes']
+        previous_question_text = request_data.get('previous_question', '')
+        current_user_info = request_data.get('user_info', {})
+
+        audio_bytes_val = base64.b64decode(audio_bytes_b64)
+        patient_response_text = speech_to_text(audio_bytes_val)
         
-        # Update conversation history
+        # Update conversation history with user's response
         conversation_history.append({
             "role": "user",
-            "content": patient_response,
-            "user_info": request_data.get('user_info', {})
+            "content": patient_response_text,
+            "user_info": current_user_info
         })
         
-        # Generate follow-up questions
-        questions = generate_followup_questions({
-            "Assistant": request_data.get('previous_question', ''),
-            "user": patient_response
-        })
+        # Generate follow-up questions.
+        # Assumes generate_followup_questions uses conversation context (implicitly or explicitly)
+        # and returns an empty string/list if no more questions are needed.
+        followup_payload = {
+            "Assistant": previous_question_text,
+            "user": patient_response_text
+            # Ideally, this function should take conversation_history.
+        }
+        generated_questions_text = generate_followup_questions(followup_payload)
         
-        # Convert questions to speech
-        questions_audio = text_to_speech(questions)
-        questions_audio_base64 = base64.b64encode(questions_audio).decode('utf-8')
-        
-        return JSONResponse({
-            "message": "Response processed successfully",
-            "user_text": patient_response,
-            "questions": questions,
-            "audio_bytes": questions_audio_base64
-        })
+        if generated_questions_text and generated_questions_text.strip(): # If there are more questions
+            conversation_history.append({
+                "role": "assistant",
+                "content": generated_questions_text
+            })
+            
+            # questions_audio = text_to_speech(generated_questions_text)
+            # questions_audio_base64 = base64.b64encode(questions_audio).decode('utf-8')
+            
+            return JSONResponse({
+                "message": "Response processed successfully. Please answer the following questions.",
+                "user_text": patient_response_text,
+                "questions": generated_questions_text,
+                # "audio_bytes": questions_audio_base64,
+                "status": "questions_pending"
+            })
+        else: # No more questions, proceed to diagnosis and report
+            # --- Generate Diagnosis ---
+            # Assumes generate_differential_diagnosis primarily uses conversation_history for clinical context.
+            diagnosis_payload = {
+                "symptoms": patient_response_text,  # The most recent user response
+                "history": conversation_history,    # The full conversation
+                "previous_questions": previous_question_text, # The last AI question that prompted the user_response
+                "Patient_Info": current_user_info   # User's demographic info
+            }
+            diagnosis_text = generate_differential_diagnosis(diagnosis_payload)
+
+            # --- Generate Medical Report ---
+            # Assumes generate_medical_report uses conversation_history for clinical details (age, gender, symptoms etc.)
+            # and patient_data["patient_info"] for basic demographics.
+            report_patient_data = {
+                "diagnosis": diagnosis_text,
+                "patient_info": current_user_info
+            }
+            final_report_markdown = generate_medical_report(conversation_history, report_patient_data)
+            
+            conversation_history.append({
+                "role": "assistant",
+                "content": f"Generated Diagnosis: {diagnosis_text}"
+            })
+            conversation_history.append({
+                "role": "assistant",
+                "content": f"Generated Report (markdown): {final_report_markdown}" # Log report for audit
+            })
+
+            summary_for_speech = f"I have completed the diagnosis. The key finding is: {diagnosis_text}. Please review the detailed report."
+            if len(diagnosis_text) > 150: # Keep spoken summary relatively brief
+                summary_for_speech = f"I have completed the diagnosis and generated a report. Please review the detailed report for findings."
+            elif not diagnosis_text:
+                 summary_for_speech = "I have completed the consultation and generated a report for you. Please review the details."
+
+
+            # final_audio = text_to_speech(summary_for_speech)
+            # final_audio_base64 = base64.b64encode(final_audio).decode('utf-8')
+ 
+            return JSONResponse({
+                "message": "Consultation complete. Diagnosis and report generated.",
+                "user_text": patient_response_text,
+                "diagnosis_text": diagnosis_text,
+                "report_markdown": final_report_markdown,
+                "final_response_text": summary_for_speech,
+                # "audio_bytes": final_audio_base64,
+                "status": "complete"
+            })
 
     except Exception as e:
         print(f"Error in process_response: {str(e)}")
+        conversation_history.append({
+            "role": "system",
+            "content": f"Error processing response: {str(e)}"
+        })
         return JSONResponse(
             status_code=500,
-            content={"error": str(e)}
+            content={"error": str(e), "status": "error"}
         )
 
 @app.post("/generate-diagnosis/")
@@ -155,14 +232,14 @@ async def generate_diagnosis(request_data: dict = Body(...)):
         })
         
         # Convert diagnosis to speech
-        diagnosis_audio = text_to_speech(diagnosis)
-        diagnosis_audio_base64 = base64.b64encode(diagnosis_audio).decode('utf-8')
+        # diagnosis_audio = text_to_speech(diagnosis)
+        # diagnosis_audio_base64 = base64.b64encode(diagnosis_audio).decode('utf-8')
         
         return JSONResponse({
             "message": "Diagnosis generated successfully",
             "user_text": patient_response,
-            "diagnosis": diagnosis,
-            "audio_bytes": diagnosis_audio_base64
+            "diagnosis": diagnosis
+            # "audio_bytes": diagnosis_audio_base64
         })
 
     except Exception as e:

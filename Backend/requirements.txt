@@ -6,3 +6,5 @@ pygame
 groq
 python-dotenv
 aiofiles
+markdown
+google-genai

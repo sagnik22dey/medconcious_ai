@@ -18,32 +18,37 @@ import { useSpeechRecognition } from "../hooks/useSpeechRecognition";
 import { useTextToSpeech } from "../hooks/useTextToSpeech";
 import { useAppContext } from "../context/AppContext";
 import {
-  generateAIResponse,
   createMessage,
-  getTypingDuration,
 } from "../utils/aiResponses";
 import { ChatMessage } from "../types";
+// import { Audio } from 'expo-av';
+
+// Define the base URL for your backend API
+const API_BASE_URL = "http://192.168.153.125:8000"; // Assuming backend runs on port 8000
 
 export function ChatScreen() {
   const navigation = useNavigation();
   const { state, dispatch } = useAppContext();
   const [inputText, setInputText] = useState("");
   const [isTyping, setIsTyping] = useState(false);
+  const [lastAiQuestionText, setLastAiQuestionText] = useState<string | null>(null);
   const flatListRef = useRef<FlatList>(null);
 
-  const { speak, isMessageSpeaking } = useTextToSpeech();
+  const { speak, stop, isMessageSpeaking } = useTextToSpeech();
 
   const { isListening, toggle } = useSpeechRecognition({
-    onAudioRecorded: (audioData) => {
-      // In chat mode, we would process the audio differently
-      // For now, let's use a placeholder text since this needs server integration
-      const transcriptText = "Speech recognized"; // This would come from server processing
-      setInputText(transcriptText);
-      sendMessage(transcriptText);
+    onAudioRecorded: (audioData: { base64: string; uri: string | null; mimeType?: string }) => {
+      const placeholderUiText = "Voice input captured, processing...";
+      // Don't add to input text, directly send
+      // setInputText(placeholderUiText);
+      sendMessage(placeholderUiText, audioData.base64);
     },
     onError: (error) => {
       console.error("Speech recognition error:", error);
       dispatch({ type: "SET_CHAT_RECORDING", payload: false });
+      const errMessage = createMessage("Error during voice recording. Please try again.", "ai");
+      dispatch({ type: "ADD_MESSAGE", payload: errMessage });
+      speak(errMessage.text, errMessage.id);
     },
   });
 
@@ -52,7 +57,6 @@ export function ChatScreen() {
   }, [isListening]);
 
   useEffect(() => {
-    // Scroll to bottom when new messages are added
     if (state.messages.length > 0) {
       setTimeout(() => {
         flatListRef.current?.scrollToEnd({ animated: true });
@@ -60,35 +64,202 @@ export function ChatScreen() {
     }
   }, [state.messages, isTyping]);
 
-  const sendMessage = (text: string = inputText) => {
-    const message = text.trim();
-    if (!message) return;
+  useEffect(() => {
+    const initiateChat = async () => {
+      if (state.messages.length === 0 && !isTyping) {
+        setIsTyping(true);
+        try {
+          const userInfoPayload = {
+            User_Info: {
+              name: "John Doe",
+              email: "john.doe@example.com",
+            },
+          };
 
-    // Add user message
-    const userMessage = createMessage(message, "user");
-    dispatch({ type: "ADD_MESSAGE", payload: userMessage });
+          const response = await fetch(`${API_BASE_URL}/initiate-chat/`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(userInfoPayload),
+          });
 
-    // Speak user message
-    speak(message, userMessage.id, { pitch: 1.1, rate: 0.9 });
+          if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || `HTTP error ${response.status}`);
+          }
 
-    // Clear input
-    setInputText("");
+          const data = await response.json();
+          // data: { message, text (greeting), audio_bytes }
+          
+          if (data.text) {
+            let initialText: string;
+            if (Array.isArray(data.text)) {
+              initialText = data.text.join(" ");
+            } else if (typeof data.text === 'string') {
+              initialText = data.text;
+            } else {
+              // Fallback for other types, or if data.text might be null/undefined unexpectedly
+              initialText = data.text ? String(data.text) : "";
+            }
 
-    // Show typing indicator
+            const initialAiMessage = createMessage(initialText, "ai");
+            dispatch({ type: "ADD_MESSAGE", payload: initialAiMessage });
+            setLastAiQuestionText(initialText); // Store AI's first question/greeting
+
+            // Speak AI response (using text, backend audio_bytes can be used if TTS hook supports it)
+            setTimeout(() => {
+              speak(initialText, initialAiMessage.id, { pitch: 0.9, rate: 0.8 });
+            }, 500);
+          }
+        } catch (error: any) {
+          console.error("Failed to initiate chat:", error);
+          const errorMessageText = error.message || "Could not connect to start the chat.";
+          const errorMessage = createMessage(`Error: ${errorMessageText}`, "ai");
+          dispatch({ type: "ADD_MESSAGE", payload: errorMessage });
+          speak(errorMessage.text, errorMessage.id);
+        } finally {
+          setIsTyping(false);
+        }
+      }
+    };
+
+    initiateChat();
+  }, []); // Runs once on mount
+
+  const callProcessResponseAPI = async (
+    userMessageText: string, // This is the original placeholder text or typed text
+    audioBase64?: string,
+    placeholderMessageId?: string | null // New parameter
+  ) => {
     setIsTyping(true);
+    try {
+      const userInfoForPayload = {
+        name: "John Doe",
+        email: "john.doe@example.com",
+      };
 
-    // Generate AI response after delay
-    setTimeout(() => {
+      const lastAiMessage = state.messages.filter((msg) => msg.sender === "ai").pop();
+      const previousQuestionText = lastAiMessage?.text || "Initial interaction";
+
+      const payload = {
+        audio_bytes: audioBase64 || "",
+        previous_question: previousQuestionText,
+        user_info: userInfoForPayload,
+      };
+
+      const response = await fetch(`${API_BASE_URL}/process-response/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || `HTTP error ${response.status}`);
+      }
+
+      const data = await response.json();
+      // data can be:
+      // 1. { message, user_text, questions, audio_bytes, status: "questions_pending" }
+      // 2. { message, user_text, diagnosis_text, report_markdown, final_response_text, audio_bytes, status: "complete" }
+      // 3. { error, status: "error" }
+
+      // Update the placeholder user message with the actual transcript from the backend
+      if (placeholderMessageId && data.user_text && typeof data.user_text === 'string' && data.user_text.trim() !== "") {
+        dispatch({
+          type: "UPDATE_MESSAGE_TEXT", // This action needs to be defined in AppContext
+          payload: { id: placeholderMessageId, newText: data.user_text },
+        });
+      }
+
+      if (data.status === "questions_pending") {
+        let questionText: string;
+        if (Array.isArray(data.questions)) {
+          questionText = data.questions.join(" ");
+        } else if (typeof data.questions === 'string') {
+          questionText = data.questions;
+        } else if (data.questions !== null && data.questions !== undefined) {
+          questionText = String(data.questions);
+        } else {
+          questionText = ""; // Default for null/undefined
+          console.warn("Received null or undefined for data.questions from backend.");
+        }
+
+        const aiQuestionMessage = createMessage(questionText, "ai");
+        dispatch({ type: "ADD_MESSAGE", payload: aiQuestionMessage });
+        setLastAiQuestionText(questionText);
+        setTimeout(() => {
+          speak(questionText, aiQuestionMessage.id, { pitch: 0.9, rate: 0.8 });
+          // Potentially play data.audio_bytes if TTS hook supports base64
+        }, 500);
+      } else if (data.status === "complete") {
+        let responseText: string;
+        if (Array.isArray(data.final_response_text)) {
+          responseText = data.final_response_text.join(" ");
+        } else if (typeof data.final_response_text === 'string') {
+          responseText = data.final_response_text;
+        } else if (data.final_response_text !== null && data.final_response_text !== undefined) {
+          responseText = String(data.final_response_text);
+        } else {
+          responseText = ""; // Default for null/undefined
+          console.warn("Received null or undefined for data.final_response_text from backend.");
+        }
+
+        const aiSummaryMessage = createMessage(responseText, "ai");
+        dispatch({ type: "ADD_MESSAGE", payload: aiSummaryMessage });
+        
+        // Assuming diagnosis_text and report_markdown are expected to be strings.
+        // If they can also be arrays, similar handling would be needed.
+        const diagnosisText = (typeof data.diagnosis_text === 'string') ? data.diagnosis_text : String(data.diagnosis_text || "");
+        const reportMarkdown = (typeof data.report_markdown === 'string') ? data.report_markdown : String(data.report_markdown || "");
+
+        const reportContent = `Diagnosis:\n${diagnosisText}\n\nMedical Report:\n${reportMarkdown}`;
+        const reportMessage = createMessage(reportContent, "ai");
+        dispatch({ type: "ADD_MESSAGE", payload: reportMessage });
+
+        setLastAiQuestionText(null); // End of Q&A
+
+        setTimeout(() => {
+          speak(responseText, aiSummaryMessage.id, { pitch: 0.9, rate: 0.8 });
+          // Potentially play data.audio_bytes
+        }, 500);
+        // Consider disabling input or showing "Consultation Ended"
+      } else if (data.status === "error") {
+        throw new Error(data.error || "An unknown error occurred while processing your response.");
+      }
+
+    } catch (error: any) {
+      console.error("Error processing response:", error);
+      const errorMessageText = error.message || "An unknown error occurred.";
+      const errorMessage = createMessage(`Error: ${errorMessageText}`, "ai");
+      dispatch({ type: "ADD_MESSAGE", payload: errorMessage });
+      speak(errorMessage.text, errorMessage.id);
+    } finally {
       setIsTyping(false);
-      const aiResponse = generateAIResponse(message);
-      const aiMessage = createMessage(aiResponse, "ai");
-      dispatch({ type: "ADD_MESSAGE", payload: aiMessage });
+    }
+  };
 
-      // Speak AI response with a slight delay
-      setTimeout(() => {
-        speak(aiResponse, aiMessage.id, { pitch: 0.9, rate: 0.8 });
-      }, 500);
-    }, getTypingDuration());
+  const sendMessage = async (text: string = inputText, audioBase64?: string) => {
+    const messageContent = text.trim();
+    // If audioBase64 is present, messageContent might be a placeholder like "Voice input captured..."
+    // We still want to proceed if audio is available.
+    if (!messageContent && !audioBase64) return;
+
+    let placeholderMessageId: string | null = null;
+
+    // Add user message to UI. If it's a voice placeholder, capture its ID.
+    if (messageContent) {
+        const userMessage = createMessage(messageContent, "user");
+        dispatch({ type: "ADD_MESSAGE", payload: userMessage });
+        // Check if this is the specific placeholder text for voice input
+        if (audioBase64 && messageContent === "Voice input captured, processing...") {
+            placeholderMessageId = userMessage.id;
+        }
+    }
+    
+    setInputText(""); // Clear input field
+
+    // Call the API processing function, passing the ID if it's a placeholder
+    await callProcessResponseAPI(messageContent, audioBase64, placeholderMessageId);
   };
 
   const handleMicPress = () => {
@@ -111,6 +282,7 @@ export function ChatScreen() {
       message={item}
       onSpeakMessage={handleSpeakMessage}
       isMessageSpeaking={isMessageSpeaking}
+      onStopMessage={stop} // Pass the stop function
     />
   );
 

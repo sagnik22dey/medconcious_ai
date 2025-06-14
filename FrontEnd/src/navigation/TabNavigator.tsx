@@ -11,6 +11,7 @@ const Tab = createBottomTabNavigator<MainTabParamList>();
 export function TabNavigator() {
   return (
     <Tab.Navigator
+      initialRouteName="Chat"
       screenOptions={{
         headerShown: false,
         tabBarStyle: {
