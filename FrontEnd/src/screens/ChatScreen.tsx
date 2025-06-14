@@ -24,7 +24,9 @@ import { ChatMessage } from "../types";
 // import { Audio } from 'expo-av';
 
 // Define the base URL for your backend API
-const API_BASE_URL = "http://192.168.153.125:8000"; // Assuming backend runs on port 8000
+// const API_BASE_URL = "http://192.168.153.125:8000"; // Assuming backend runs on port 8000
+const API_BASE_URL = "http://192.168.29.65:8000";
+
 
 export function ChatScreen() {
   const navigation = useNavigation();

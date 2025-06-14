@@ -5,13 +5,16 @@ import base64
 from typing import List, Dict
 from dotenv import load_dotenv, find_dotenv
 from static.helper_files.llm import (
-    speech_to_text, 
-    text_to_speech, 
+    speech_to_text,
+    text_to_speech,
     generate_greeting,
     generate_followup_questions,
     generate_differential_diagnosis,
-    generate_medical_report
+    generate_medical_report,
+    process_voice_with_gemini,
+    generate_greeting_with_voice
 )
+from static.helper_files.prompts import VOICE_PROCESSING_SYSTEM_PROMPT
 
 app = FastAPI(
     title="MedConscious AI",
@@ -32,7 +35,8 @@ async def initiate_chat(patient_info_payload: dict = Body(...)):
         "User_Info": {
             "name": "John Doe",
             "email": "abc@xyz.com"
-            }
+        },
+        "audio_base64": "<optional_base64_encoded_audio_for_voice_greeting>"
     }
     """
     global conversation_history
@@ -40,24 +44,47 @@ async def initiate_chat(patient_info_payload: dict = Body(...)):
         conversation_history.clear() # Clear history for a new chat session
         
         user_info = patient_info_payload.get("User_Info", {})
-        greeting_text = generate_greeting(user_info) # Pass user_info
+        audio_base64 = patient_info_payload.get("audio_base64", None)
         
-        # Convert greeting to speech
-        # greeting_audio = text_to_speech(greeting_text)
-        # greeting_audio_base64 = base64.b64encode(greeting_audio).decode('utf-8')
-        
-        # Add AI's greeting to history
-        conversation_history.append({
-            "role": "assistant",
-            "content": greeting_text,
-            # "user_info": user_info # user_info associated with the assistant's greeting context
-        })
-        
-        return JSONResponse({
-            "message": "Greeting generated successfully. Conversation history cleared.",
-            "text": greeting_text
-            # "audio_bytes": greeting_audio_base64
-        })
+        if audio_base64:
+            # Use enhanced voice processing for greeting
+            result = generate_greeting_with_voice(user_info, audio_base64)
+            greeting_text = result["greeting"]
+            transcription = result.get("transcription", "")
+            
+            # Add both user's voice input and AI's greeting to history
+            if transcription:
+                conversation_history.append({
+                    "role": "user",
+                    "content": transcription,
+                    "user_info": user_info
+                })
+                
+            conversation_history.append({
+                "role": "assistant",
+                "content": greeting_text
+            })
+            
+            return JSONResponse({
+                "message": "Voice greeting processed successfully. Conversation history cleared.",
+                "text": greeting_text,
+                "transcription": transcription,
+                "processing_type": "voice_integrated"
+            })
+        else:
+            # Traditional text-based greeting
+            greeting_text = generate_greeting({"User_Info": user_info})
+            
+            conversation_history.append({
+                "role": "assistant",
+                "content": greeting_text
+            })
+            
+            return JSONResponse({
+                "message": "Greeting generated successfully. Conversation history cleared.",
+                "text": greeting_text,
+                "processing_type": "text_only"
+            })
 
     except Exception as e:
         print(f"Error in initiate_chat: {str(e)}")
@@ -72,6 +99,111 @@ async def health_check():
     Health check endpoint to verify API is running
     """
     return JSONResponse({"status": "API is running"})
+
+@app.post("/process-voice-integrated/")
+async def process_voice_integrated(request_data: dict = Body(...)):
+    """
+    Process voice input directly with Gemini 2.5 Flash Preview for integrated transcription and response
+    
+    Payload process-voice-integrated:
+    {
+        "audio_base64": "<base64_encoded_audio>",
+        "user_info": {
+            "name": "John Doe",
+            "email": "abc@xyz.com"
+        },
+        "conversation_stage": "greeting|followup|diagnosis|report",
+        "context": {
+            "previous_questions": "optional previous questions",
+            "patient_info": "optional patient information"
+        }
+    }
+    """
+    global conversation_history
+    try:
+        audio_base64 = request_data.get('audio_base64', '')
+        user_info = request_data.get('user_info', {})
+        conversation_stage = request_data.get('conversation_stage', 'followup')
+        context = request_data.get('context', {})
+        
+        if not audio_base64:
+            raise ValueError("audio_base64 is required")
+        
+        # Create stage-specific system prompt
+        if conversation_stage == "greeting":
+            system_prompt = f"""
+{VOICE_PROCESSING_SYSTEM_PROMPT}
+
+**Current Task**: Generate a personalized greeting for the patient and ask initial assessment questions.
+**Patient Info**: {user_info}
+**Instructions**: After transcribing the audio, provide a warm greeting using the patient's name and begin the medical consultation by asking about their chief complaint or symptoms.
+"""
+        elif conversation_stage == "followup":
+            system_prompt = f"""
+{VOICE_PROCESSING_SYSTEM_PROMPT}
+
+**Current Task**: Process patient response and generate appropriate follow-up medical questions.
+**Context**: {context}
+**Instructions**: After transcribing the audio, analyze the patient's response and ask relevant follow-up questions to gather more diagnostic information. If you have enough information, indicate that you're ready to provide a diagnosis.
+"""
+        elif conversation_stage == "diagnosis":
+            system_prompt = f"""
+{VOICE_PROCESSING_SYSTEM_PROMPT}
+
+**Current Task**: Process patient information and provide differential diagnosis.
+**Context**: {context}
+**Conversation History**: {conversation_history}
+**Instructions**: After transcribing the audio, analyze all available information and provide a comprehensive differential diagnosis with recommendations.
+"""
+        elif conversation_stage == "report":
+            system_prompt = f"""
+{VOICE_PROCESSING_SYSTEM_PROMPT}
+
+**Current Task**: Generate final medical report and recommendations.
+**Context**: {context}
+**Conversation History**: {conversation_history}
+**Instructions**: After transcribing the audio, generate a comprehensive medical report with diagnosis, treatment recommendations, and follow-up instructions.
+"""
+        else:
+            system_prompt = VOICE_PROCESSING_SYSTEM_PROMPT
+        
+        # Process voice with Gemini
+        result = process_voice_with_gemini(
+            audio_base64=audio_base64,
+            system_prompt=system_prompt,
+            conversation_history=conversation_history
+        )
+        
+        # Update conversation history
+        conversation_history.append({
+            "role": "user",
+            "content": result["transcription"],
+            "user_info": user_info
+        })
+        
+        conversation_history.append({
+            "role": "assistant",
+            "content": result["response"]
+        })
+        
+        return JSONResponse({
+            "message": "Voice processed successfully with integrated transcription and response",
+            "transcription": result["transcription"],
+            "ai_response": result["response"],
+            "conversation_stage": conversation_stage,
+            "status": "success"
+        })
+        
+    except Exception as e:
+        print(f"Error in process_voice_integrated: {str(e)}")
+        conversation_history.append({
+            "role": "system",
+            "content": f"Error processing voice: {str(e)}"
+        })
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e), "status": "error"}
+        )
 
 @app.post("/process-response/")
 async def process_response(request_data: dict = Body(...)):
@@ -121,14 +253,10 @@ async def process_response(request_data: dict = Body(...)):
                 "content": generated_questions_text
             })
             
-            # questions_audio = text_to_speech(generated_questions_text)
-            # questions_audio_base64 = base64.b64encode(questions_audio).decode('utf-8')
-            
             return JSONResponse({
                 "message": "Response processed successfully. Please answer the following questions.",
                 "user_text": patient_response_text,
                 "questions": generated_questions_text,
-                # "audio_bytes": questions_audio_base64,
                 "status": "questions_pending"
             })
         else: # No more questions, proceed to diagnosis and report
@@ -165,10 +293,6 @@ async def process_response(request_data: dict = Body(...)):
                 summary_for_speech = f"I have completed the diagnosis and generated a report. Please review the detailed report for findings."
             elif not diagnosis_text:
                  summary_for_speech = "I have completed the consultation and generated a report for you. Please review the details."
-
-
-            # final_audio = text_to_speech(summary_for_speech)
-            # final_audio_base64 = base64.b64encode(final_audio).decode('utf-8')
  
             return JSONResponse({
                 "message": "Consultation complete. Diagnosis and report generated.",
@@ -176,7 +300,6 @@ async def process_response(request_data: dict = Body(...)):
                 "diagnosis_text": diagnosis_text,
                 "report_markdown": final_report_markdown,
                 "final_response_text": summary_for_speech,
-                # "audio_bytes": final_audio_base64,
                 "status": "complete"
             })
 
