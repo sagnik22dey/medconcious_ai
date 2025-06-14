@@ -80,9 +80,10 @@ def text_to_speech(text: str) -> bytes:
         )
         
         # Get raw bytes from response
-        with io.BytesIO() as buffer:
-            response.write_to_file(buffer)
-            return buffer.getvalue()
+        # response.write_to_file() can sometimes cause issues with BytesIO.
+        # Reading the stream directly is often more robust.
+        audio_bytes = response.read()
+        return audio_bytes
 
     except Exception as e:
         print(f"Error in text to speech conversion: {e}")
@@ -231,7 +232,7 @@ def record_audio(duration=5):
 
 def generate_llm_response(
     prompt: str, 
-    model: str = "gemini-2.5-flash-preview-05-20",
+    model: str = "gemini-2.5-pro-exp-03-25",
     custom_model_fn: Optional[Callable] = None,
     **kwargs: Any
 ) -> str:

@@ -10,6 +10,7 @@ type AppAction =
   | { type: 'SET_RECORDING'; payload: boolean }
   | { type: 'SET_CHAT_RECORDING'; payload: boolean }
   | { type: 'ADD_MESSAGE'; payload: ChatMessage }
+  | { type: 'UPDATE_MESSAGE_TEXT'; payload: { id: string; newText: string } } // Added new action
   | { type: 'SET_CURRENT_SCREEN'; payload: string }
   | { type: 'CLEAR_MESSAGES' };
 
@@ -30,6 +31,13 @@ function appReducer(state: AppState, action: AppAction): AppState {
       return { ...state, isChatRecording: action.payload };
     case 'ADD_MESSAGE':
       return { ...state, messages: [...state.messages, action.payload] };
+    case 'UPDATE_MESSAGE_TEXT': // Added reducer case
+      return {
+        ...state,
+        messages: state.messages.map(msg =>
+          msg.id === action.payload.id ? { ...msg, text: action.payload.newText } : msg
+        ),
+      };
     case 'SET_CURRENT_SCREEN':
       return { ...state, currentScreen: action.payload };
     case 'CLEAR_MESSAGES':

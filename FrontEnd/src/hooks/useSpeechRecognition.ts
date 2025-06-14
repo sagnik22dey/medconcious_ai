@@ -170,23 +170,25 @@ export function useSpeechRecognition({
       console.log("Creating Audio.Recording instance...");
       const recordingOptions = {
         android: {
-          extension: '.m4a',
-          outputFormat: Audio.AndroidOutputFormat.MPEG_4,
-          audioEncoder: Audio.AndroidAudioEncoder.AAC,
+          extension: '.wav',
+          outputFormat: Audio.AndroidOutputFormat.DEFAULT, // Attempt to get WAV output
+          audioEncoder: Audio.AndroidAudioEncoder.DEFAULT, // Use default encoder
           sampleRate: 44100,
           numberOfChannels: 1,
-          bitRate: 128000,
         },
         ios: {
-          extension: '.m4a',
-          outputFormat: Audio.IOSOutputFormat.MPEG4AAC,
-          audioQuality: Audio.IOSAudioQuality.MEDIUM,
+          extension: '.wav',
+          outputFormat: Audio.IOSOutputFormat.LINEARPCM, // This is for WAV
           sampleRate: 44100,
           numberOfChannels: 1,
-          bitRate: 128000,
+          audioQuality: Audio.IOSAudioQuality.MEDIUM, // Required by type, may be ignored for LINEARPCM
+          bitRate: 128000, // Required by type, may be ignored for LINEARPCM
+          linearPCMBitDepth: 16, // Specify bit depth for PCM
+          linearPCMIsFloat: false, // Specify float for PCM
+          linearPCMIsBigEndian: false, // Specify endianness for PCM
         },
-        web: {
-          mimeType: 'audio/webm;codecs=opus',
+        web: { // Web settings remain, though this hook focuses on native
+          mimeType: 'audio/wav', // Consistent with WAV attempt
           bitsPerSecond: 128000,
         },
       };

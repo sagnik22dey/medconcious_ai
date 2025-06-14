@@ -14,12 +14,14 @@ interface ChatBubbleProps {
   message: ChatMessage;
   onSpeakMessage?: (text: string, messageId: string) => void;
   isMessageSpeaking?: (messageId: string) => boolean;
+  onStopMessage?: () => void; // Add onStopMessage prop
 }
 
 export function ChatBubble({
   message,
   onSpeakMessage,
   isMessageSpeaking,
+  onStopMessage, // Destructure onStopMessage
 }: ChatBubbleProps) {
   const slideAnim = useRef(new Animated.Value(10)).current;
   const opacityAnim = useRef(new Animated.Value(0)).current;
@@ -43,7 +45,9 @@ export function ChatBubble({
   const isSpeaking = isMessageSpeaking ? isMessageSpeaking(message.id) : false;
 
   const handleSpeakPress = () => {
-    if (onSpeakMessage) {
+    if (isSpeaking && onStopMessage) {
+      onStopMessage();
+    } else if (onSpeakMessage) {
       onSpeakMessage(message.text, message.id);
     }
   };
