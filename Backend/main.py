@@ -227,8 +227,15 @@ async def process_response(request_data: dict = Body(...)):
         previous_question_text = request_data.get('previous_question', '')
         current_user_info = request_data.get('user_info', {})
 
-        audio_bytes_val = base64.b64decode(audio_bytes_b64)
-        patient_response_text = speech_to_text(audio_bytes_val)
+        # Handle empty audio_bytes (for text-only input)
+        if not audio_bytes_b64:
+            patient_response_text = request_data.get('text', '')
+            if not patient_response_text:
+                raise ValueError("Either audio_bytes or text must be provided")
+        else:
+            # Decode and process audio
+            audio_bytes_val = base64.b64decode(audio_bytes_b64)
+            patient_response_text = speech_to_text(audio_bytes_val)
         
         # Update conversation history with user's response
         conversation_history.append({
@@ -463,6 +470,146 @@ async def generate_report(request_data: dict = Body(...)):
         return JSONResponse(
             status_code=500,
             content={"error": str(e)}
+        )
+
+@app.post("/process-expo-av-audio/")
+async def process_expo_av_audio(request_data: dict = Body(...)):
+    """
+    Process audio recorded with expo-av, convert to base64 and handle transcription
+    
+    Payload process-expo-av-audio:
+    {
+        "audio_base64": "<base64_encoded_audio_from_expo_av>",
+        "mime_type": "audio/wav", // or audio/m4a, audio/mp4, etc.
+        "previous_question": "Previous AI question",
+        "user_info": {
+            "name": "John Doe",
+            "email": "abc@xyz.com"
+        },
+        "conversation_stage": "followup" // or "greeting", "diagnosis", "report"
+    }
+    """
+    global conversation_history
+    try:
+        audio_base64 = request_data.get('audio_base64', '')
+        mime_type = request_data.get('mime_type', 'audio/wav')
+        previous_question = request_data.get('previous_question', '')
+        user_info = request_data.get('user_info', {})
+        conversation_stage = request_data.get('conversation_stage', 'followup')
+        
+        if not audio_base64:
+            raise ValueError("audio_base64 is required")
+        
+        # Decode base64 audio
+        audio_bytes = base64.b64decode(audio_base64)
+        
+        # Transcribe audio using improved speech_to_text function
+        transcribed_text = speech_to_text(audio_bytes)
+        
+        # Update conversation history with user's response
+        conversation_history.append({
+            "role": "user",
+            "content": transcribed_text,
+            "user_info": user_info
+        })
+        
+        # Process based on conversation stage
+        if conversation_stage == "followup":
+            # Generate follow-up questions
+            followup_payload = {
+                "Assistant": previous_question,
+                "user": transcribed_text
+            }
+            generated_questions = generate_followup_questions(followup_payload)
+            
+            if generated_questions and generated_questions.strip():
+                conversation_history.append({
+                    "role": "assistant",
+                    "content": generated_questions
+                })
+                
+                return JSONResponse({
+                    "message": "Audio processed successfully. Follow-up questions generated.",
+                    "transcription": transcribed_text,
+                    "questions": generated_questions,
+                    "status": "questions_pending",
+                    "conversation_stage": conversation_stage
+                })
+            else:
+                # No more questions, proceed to diagnosis
+                diagnosis_payload = {
+                    "symptoms": transcribed_text,
+                    "history": conversation_history,
+                    "previous_questions": previous_question,
+                    "Patient_Info": user_info
+                }
+                diagnosis_text = generate_differential_diagnosis(diagnosis_payload)
+                
+                # Generate medical report
+                report_data = {
+                    "diagnosis": diagnosis_text,
+                    "patient_info": user_info
+                }
+                report_markdown = generate_medical_report(conversation_history, report_data)
+                
+                conversation_history.append({
+                    "role": "assistant",
+                    "content": f"Diagnosis: {diagnosis_text}"
+                })
+                
+                summary_text = f"Based on our conversation, I have completed the diagnosis. Please review the detailed report."
+                
+                return JSONResponse({
+                    "message": "Audio processed successfully. Consultation complete.",
+                    "transcription": transcribed_text,
+                    "diagnosis_text": diagnosis_text,
+                    "report_markdown": report_markdown,
+                    "final_response_text": summary_text,
+                    "status": "complete",
+                    "conversation_stage": "complete"
+                })
+                
+        elif conversation_stage == "diagnosis":
+            # Generate diagnosis directly
+            diagnosis_payload = {
+                "symptoms": transcribed_text,
+                "history": conversation_history,
+                "previous_questions": previous_question,
+                "Patient_Info": user_info
+            }
+            diagnosis_text = generate_differential_diagnosis(diagnosis_payload)
+            
+            conversation_history.append({
+                "role": "assistant",
+                "content": f"Diagnosis: {diagnosis_text}"
+            })
+            
+            return JSONResponse({
+                "message": "Audio processed successfully. Diagnosis generated.",
+                "transcription": transcribed_text,
+                "diagnosis": diagnosis_text,
+                "status": "diagnosis_complete",
+                "conversation_stage": conversation_stage
+            })
+            
+        else:
+            # Default fallback
+            return JSONResponse({
+                "message": "Audio processed successfully.",
+                "transcription": transcribed_text,
+                "status": "transcribed",
+                "conversation_stage": conversation_stage
+            })
+        
+    except Exception as e:
+        print(f"Error in process_expo_av_audio: {str(e)}")
+        conversation_history.append({
+            "role": "system",
+            "content": f"Error processing expo-av audio: {str(e)}"
+        })
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e), "status": "error"}
         )
 
 if __name__ == "__main__":

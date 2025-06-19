@@ -43,7 +43,7 @@ export function ChatScreen() {
       const placeholderUiText = "Voice input captured, processing...";
       // Don't add to input text, directly send
       // setInputText(placeholderUiText);
-      sendMessage(placeholderUiText, audioData.base64);
+      sendMessage(placeholderUiText, audioData.base64, audioData.mimeType);
     },
     onError: (error) => {
       console.error("Speech recognition error:", error);
@@ -130,7 +130,8 @@ export function ChatScreen() {
   const callProcessResponseAPI = async (
     userMessageText: string, // This is the original placeholder text or typed text
     audioBase64?: string,
-    placeholderMessageId?: string | null // New parameter
+    placeholderMessageId?: string | null, // New parameter
+    audioMimeType?: string // Add mime type parameter
   ) => {
     setIsTyping(true);
     try {
@@ -142,17 +143,38 @@ export function ChatScreen() {
       const lastAiMessage = state.messages.filter((msg) => msg.sender === "ai").pop();
       const previousQuestionText = lastAiMessage?.text || "Initial interaction";
 
-      const payload = {
-        audio_bytes: audioBase64 || "",
-        previous_question: previousQuestionText,
-        user_info: userInfoForPayload,
-      };
+      let response;
+      
+      // Use the new expo-av audio endpoint if audio is provided
+      if (audioBase64) {
+        const payload = {
+          audio_base64: audioBase64,
+          mime_type: audioMimeType || "audio/wav",
+          previous_question: previousQuestionText,
+          user_info: userInfoForPayload,
+          conversation_stage: "followup"
+        };
 
-      const response = await fetch(`${API_BASE_URL}/process-response/`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+        response = await fetch(`${API_BASE_URL}/process-expo-av-audio/`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+      } else {
+        // Use the original endpoint for text-only input
+        const payload = {
+          audio_bytes: "",
+          text: userMessageText,
+          previous_question: previousQuestionText,
+          user_info: userInfoForPayload,
+        };
+
+        response = await fetch(`${API_BASE_URL}/process-response/`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+      }
 
       if (!response.ok) {
         const errorData = await response.json();
@@ -160,16 +182,16 @@ export function ChatScreen() {
       }
 
       const data = await response.json();
-      // data can be:
-      // 1. { message, user_text, questions, audio_bytes, status: "questions_pending" }
-      // 2. { message, user_text, diagnosis_text, report_markdown, final_response_text, audio_bytes, status: "complete" }
-      // 3. { error, status: "error" }
+      // data can be from different endpoints:
+      // expo-av endpoint: { message, transcription, questions/diagnosis_text/final_response_text, status, conversation_stage }
+      // original endpoint: { message, user_text, questions, audio_bytes, status: "questions_pending" }
 
       // Update the placeholder user message with the actual transcript from the backend
-      if (placeholderMessageId && data.user_text && typeof data.user_text === 'string' && data.user_text.trim() !== "") {
+      const transcriptionText = data.transcription || data.user_text;
+      if (placeholderMessageId && transcriptionText && typeof transcriptionText === 'string' && transcriptionText.trim() !== "") {
         dispatch({
           type: "UPDATE_MESSAGE_TEXT", // This action needs to be defined in AppContext
-          payload: { id: placeholderMessageId, newText: data.user_text },
+          payload: { id: placeholderMessageId, newText: transcriptionText },
         });
       }
 
@@ -225,6 +247,18 @@ export function ChatScreen() {
           // Potentially play data.audio_bytes
         }, 500);
         // Consider disabling input or showing "Consultation Ended"
+      } else if (data.status === "diagnosis_complete") {
+        // Handle diagnosis completion from expo-av endpoint
+        const diagnosisText = data.diagnosis || "";
+        const responseText = `I have completed the diagnosis based on our conversation. Here are my findings: ${diagnosisText}`;
+        
+        const aiDiagnosisMessage = createMessage(responseText, "ai");
+        dispatch({ type: "ADD_MESSAGE", payload: aiDiagnosisMessage });
+        setLastAiQuestionText(null);
+        
+        setTimeout(() => {
+          speak(responseText, aiDiagnosisMessage.id, { pitch: 0.9, rate: 0.8 });
+        }, 500);
       } else if (data.status === "error") {
         throw new Error(data.error || "An unknown error occurred while processing your response.");
       }
@@ -240,7 +274,7 @@ export function ChatScreen() {
     }
   };
 
-  const sendMessage = async (text: string = inputText, audioBase64?: string) => {
+  const sendMessage = async (text: string = inputText, audioBase64?: string, audioMimeType?: string) => {
     const messageContent = text.trim();
     // If audioBase64 is present, messageContent might be a placeholder like "Voice input captured..."
     // We still want to proceed if audio is available.
@@ -261,7 +295,7 @@ export function ChatScreen() {
     setInputText(""); // Clear input field
 
     // Call the API processing function, passing the ID if it's a placeholder
-    await callProcessResponseAPI(messageContent, audioBase64, placeholderMessageId);
+    await callProcessResponseAPI(messageContent, audioBase64, placeholderMessageId, audioMimeType);
   };
 
   const handleMicPress = () => {

@@ -1,0 +1,8 @@
+{
+  "audio_bytes": "UklGRiRYKABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQBYKAAAAAAA//8AAAAAAAAAAP//AAAAAAAAAAAAAAAAAAAA...(truncated)",
+  "previous_question": "Give me the patient Name, Age, Gender and Symptoms",
+  "user_info": {
+    "name": "John Doe",
+    "email": "abc@xyz.com"
+  }
+}

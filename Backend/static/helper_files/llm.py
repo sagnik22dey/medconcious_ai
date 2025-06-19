@@ -162,27 +162,38 @@ def speech_to_text(audio_bytes: bytes) -> str:
     """
     Convert audio bytes to text
     Args:
-        audio_bytes: Raw audio data in bytes
+        audio_bytes: Audio data in bytes (can be raw PCM or encoded audio like WAV/M4A)
     Returns:
         str: Transcribed text
     """
     try:
-        # Create in-memory WAV file
-        with io.BytesIO() as wav_buffer:
-            with wave.open(wav_buffer, 'wb') as wf:
-                wf.setnchannels(1)  # Mono
-                wf.setsampwidth(2)  # 16-bit
-                wf.setframerate(44100)
-                wf.writeframes(audio_bytes)
-            wav_data = wav_buffer.getvalue()
-
-        # Transcribe audio
+        # Try to use the audio bytes directly first (for WAV/M4A files from expo-av)
         client = Groq()
-        transcription = client.audio.transcriptions.create(
-            file=("audio.wav", wav_data),
-            model="whisper-large-v3",
-            response_format="verbose_json",
-        )
+        
+        # Check if the audio_bytes is already a valid audio file format
+        # WAV files start with 'RIFF', M4A files start with specific byte patterns
+        if audio_bytes[:4] == b'RIFF' or audio_bytes[:4] == b'ftyp' or audio_bytes[:8] == b'\x00\x00\x00\x20ftyp':
+            # Audio is already in a proper format (WAV, M4A, etc.)
+            transcription = client.audio.transcriptions.create(
+                file=("audio.wav", audio_bytes),
+                model="whisper-large-v3",
+                response_format="verbose_json",
+            )
+        else:
+            # Audio might be raw PCM data, wrap it in WAV format
+            with io.BytesIO() as wav_buffer:
+                with wave.open(wav_buffer, 'wb') as wf:
+                    wf.setnchannels(1)  # Mono
+                    wf.setsampwidth(2)  # 16-bit
+                    wf.setframerate(44100)
+                    wf.writeframes(audio_bytes)
+                wav_data = wav_buffer.getvalue()
+
+            transcription = client.audio.transcriptions.create(
+                file=("audio.wav", wav_data),
+                model="whisper-large-v3",
+                response_format="verbose_json",
+            )
         
         if not transcription.text:
             raise ValueError("No text was transcribed from the audio")

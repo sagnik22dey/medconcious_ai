@@ -1,0 +1,6 @@
+{
+  "message": "Response processed successfully. Please answer the following questions.",
+  "user_text": "Hello, my name is Swapnandu Chakraborty. I am a male of age 23. I am suffering from headache.",
+  "questions": "Can you describe your headache's characteristics, including when it started, how often it occurs, its typical duration, its location, and what it feels like (e.g., throbbing, dull, sharp)? On a scale of 1-10, how severe is it? Are there any other symptoms that accompany your headache, such as nausea, vomiting, sensitivity to light or sound, changes in vision, fever, neck stiffness, or weakness/numbness? Have you had headaches like this before? If so, what usually helps or makes it worse? Have you experienced any recent head trauma?",
+  "status": "questions_pending"
+}
