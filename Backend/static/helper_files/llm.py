@@ -1,5 +1,6 @@
 import os
 import wave
+import base64
 import pyaudio
 import tempfile
 import pygame
@@ -21,31 +22,23 @@ genai_client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
 
 
-def speech_to_text(audio_bytes: bytes) -> str:
+def speech_to_text(audio_path: str) -> str:
     """
-    Convert audio bytes to text
+    Convert audio file to text
     Args:
-        audio_bytes: Raw audio data in bytes
+        audio_path: Path to the audio file
     Returns:
         str: Transcribed text
     """
     try:
-        # Create in-memory WAV file
-        with io.BytesIO() as wav_buffer:
-            with wave.open(wav_buffer, 'wb') as wf:
-                wf.setnchannels(1)  # Mono
-                wf.setsampwidth(2)  # 16-bit
-                wf.setframerate(44100)
-                wf.writeframes(audio_bytes)
-            wav_data = wav_buffer.getvalue()
-
-        # Transcribe audio
+        # Transcribe audio using the file path
         client = Groq()
-        transcription = client.audio.transcriptions.create(
-            file=("audio.wav", wav_data),
-            model="whisper-large-v3",
-            response_format="verbose_json",
-        )
+        with open(audio_path, "rb") as audio_file:
+            transcription = client.audio.transcriptions.create(
+                file=(os.path.basename(audio_path), audio_file.read()),
+                model="whisper-large-v3",
+                response_format="verbose_json",
+            )
         
         if not transcription.text:
             raise ValueError("No text was transcribed from the audio")
@@ -138,7 +131,18 @@ def generate_followup_questions(conversation_context: dict) -> str:
         if "error" in parsed:
             raise ValueError(f"Error in response: {parsed['error']}")
             
-        return " ".join(parsed['content'])
+        # Ensure content is a list and filter out None values
+        content_list = parsed.get('content', [])
+        if content_list is None:
+            return "" # Return empty string if content is None
+        
+        if not isinstance(content_list, list):
+            # If content is not a list, convert it to a string and wrap in a list
+            content_list = [str(content_list)]
+
+        # Filter out None values and ensure all items are strings
+        questions = [str(q) for q in content_list if q is not None]
+        return " ".join(questions)
 
     except Exception as e:
         print(f"Error generating follow-up questions: {e}")
@@ -232,7 +236,7 @@ def record_audio(duration=5):
 
 def generate_llm_response(
     prompt: str, 
-    model: str = "gemini-2.5-pro-exp-03-25",
+    model: str = "gemini-2.5-flash-preview-05-20",
     custom_model_fn: Optional[Callable] = None,
     **kwargs: Any
 ) -> str:
@@ -264,7 +268,7 @@ def generate_llm_response(
             contents=contents,
             config=types.GenerateContentConfig(response_mime_type="text/plain")
         ):
-            response += chunk.text
+            response += chunk.text or ""
             
         return response
 

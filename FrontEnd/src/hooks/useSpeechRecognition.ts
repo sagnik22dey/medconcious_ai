@@ -2,10 +2,12 @@ import { useState, useEffect, useRef } from "react";
 import { Platform } from "react-native";
 import { Audio } from "expo-av";
 import * as FileSystem from "expo-file-system";
-import * as Speech from "expo-speech"; // Keep for Text-to-Speech (TTS)
+import * as Speech from "expo-speech";
+import { AudioManager } from "../utils/audioManager";
 
 interface UseAudioRecorderProps {
   onError?: (error: string) => void;
+  onPartialTranscript?: (text: string) => void;
   onAudioRecorded?: (audioData: {
     base64: string;
     uri: string | null;
@@ -13,23 +15,21 @@ interface UseAudioRecorderProps {
   }) => void;
 }
 
-// Consider renaming the hook to useAudioRecorder in the future if STT is fully removed from its responsibilities.
-// For now, keeping useSpeechRecognition to minimize breaking changes in VoiceScreen immediately.
 export function useSpeechRecognition({
   onError,
+  onPartialTranscript,
   onAudioRecorded,
 }: UseAudioRecorderProps = {}) {
-  const [isListening, setIsListening] = useState(false); // True when actively recording audio
+  const [isListening, setIsListening] = useState(false);
   const [hasAudioRecordingPermission, setHasAudioRecordingPermission] =
     useState<boolean | null>(null);
-  const isRecordingRef = useRef(false); // To track internal recording state reliably
+  const isRecordingRef = useRef(false);
   const recordingRef = useRef<Audio.Recording | null>(null);
   const [recordedAudioUri, setRecordedAudioUri] = useState<string | null>(null);
 
   useEffect(() => {
     requestAudioPermissions();
 
-    // Cleanup function to ensure recording is stopped on unmount
     return () => {
       if (isRecordingRef.current && recordingRef.current) {
         console.log("Cleaning up: stopping recording on unmount");
@@ -38,17 +38,16 @@ export function useSpeechRecognition({
           .catch((e) =>
             console.error("Error stopping recording on unmount", e)
           );
-        isRecordingRef.current = false; // Ensure ref is updated
-        recordingRef.current = null; // Ensure ref is cleared
+        isRecordingRef.current = false;
+        recordingRef.current = null;
       }
     };
   }, []);
 
   const requestAudioPermissions = async () => {
-    console.log("Requesting audio recording permissions (expo-av)...");
+    console.log("Requesting audio recording permissions...");
     if (Platform.OS !== "web") {
       try {
-        // Initialize audio mode first
         await Audio.setAudioModeAsync({
           allowsRecordingIOS: true,
           playsInSilentModeIOS: true,
@@ -76,22 +75,18 @@ export function useSpeechRecognition({
         onError?.(`Error requesting audio permissions: ${e.message}`);
       }
     } else {
-      // For web, MediaRecorder API would be used for audio recording.
-      // This hook is now primarily for native expo-av.
-      setHasAudioRecordingPermission(true); // Placeholder for web, not using expo-av here.
+      setHasAudioRecordingPermission(true);
       console.log(
-        "Web platform: Audio recording permissions would be handled by browser if MediaRecorder were used."
+        "Web platform: Audio recording permissions would be handled by browser."
       );
     }
   };
 
   const startListening = async () => {
-    // This function now solely starts audio recording
     if (Platform.OS === "web") {
       onError?.(
         "Audio recording via expo-av is not supported on web in this hook."
       );
-      // Implement web audio recording (e.g., using MediaRecorder API) separately if needed.
       return;
     }
 
@@ -100,8 +95,6 @@ export function useSpeechRecognition({
         "Audio recording permissions not yet determined, requesting..."
       );
       await requestAudioPermissions();
-      // It's often better to let the user click again after permissions are granted
-      // as the permission dialog can interrupt the flow.
       return;
     }
 
@@ -112,7 +105,6 @@ export function useSpeechRecognition({
       return;
     }
 
-    // Double-check permissions right before recording
     try {
       const { status } = await Audio.getPermissionsAsync();
       if (status !== 'granted') {
@@ -127,7 +119,6 @@ export function useSpeechRecognition({
       console.warn("Permission check failed:", permError.message);
     }
 
-    // Consolidated cleanup and state reset before attempting to start a new recording
     if (recordingRef.current) {
       console.log(
         "startListening: Existing recordingRef.current found. Attempting to stop and unload."
@@ -142,22 +133,19 @@ export function useSpeechRecognition({
           `startListening: Error during stopAndUnloadAsync of existing recording: ${e.message}`
         );
       }
-      recordingRef.current = null; // Nullify the ref in any case
+      recordingRef.current = null;
     }
 
-    // Reset internal and UI recording state flags
     isRecordingRef.current = false;
-    setIsListening(false); // Ensure UI is reset before attempting to start
+    setIsListening(false);
 
-    // Brief delay to allow system resources to potentially free up after any stop/unload.
-    // This can be crucial for expo-av stability.
     await new Promise(resolve => setTimeout(resolve, 100));
 
     try {
-      console.log("Starting audio recording (expo-av)...");
-      setRecordedAudioUri(null); // Clear previous URI
+      console.log("Starting high-quality WAV audio recording...");
+      setRecordedAudioUri(null);
 
-      // Ensure audio mode is set before creating recording
+      // Set audio mode immediately before recording
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: true,
         playsInSilentModeIOS: true,
@@ -166,118 +154,73 @@ export function useSpeechRecognition({
         playThroughEarpieceAndroid: false,
       });
 
-      // Create recording with simplified, more reliable options
-      console.log("Creating Audio.Recording instance...");
+      // High-quality recording options for better speech recognition
       const recordingOptions = {
         android: {
           extension: '.wav',
-          outputFormat: Audio.AndroidOutputFormat.DEFAULT, // Attempt to get WAV output
-          audioEncoder: Audio.AndroidAudioEncoder.DEFAULT, // Use default encoder
-          sampleRate: 44100,
-          numberOfChannels: 1,
+          outputFormat: Audio.AndroidOutputFormat.DEFAULT,
+          audioEncoder: Audio.AndroidAudioEncoder.DEFAULT,
+          sampleRate: 44100, // High-quality sample rate
+          numberOfChannels: 1, // Mono for speech
+          bitRate: 128000, // Higher bit rate for better quality
         },
         ios: {
           extension: '.wav',
-          outputFormat: Audio.IOSOutputFormat.LINEARPCM, // This is for WAV
-          sampleRate: 44100,
-          numberOfChannels: 1,
-          audioQuality: Audio.IOSAudioQuality.MEDIUM, // Required by type, may be ignored for LINEARPCM
-          bitRate: 128000, // Required by type, may be ignored for LINEARPCM
-          linearPCMBitDepth: 16, // Specify bit depth for PCM
-          linearPCMIsFloat: false, // Specify float for PCM
-          linearPCMIsBigEndian: false, // Specify endianness for PCM
+          outputFormat: Audio.IOSOutputFormat.LINEARPCM,
+          sampleRate: 44100, // High-quality sample rate
+          numberOfChannels: 1, // Mono for speech
+          audioQuality: Audio.IOSAudioQuality.HIGH,
+          bitRate: 128000, // Higher bit rate for better quality
+          linearPCMBitDepth: 16,
+          linearPCMIsFloat: false,
+          linearPCMIsBigEndian: false,
         },
-        web: { // Web settings remain, though this hook focuses on native
-          mimeType: 'audio/wav', // Consistent with WAV attempt
+        web: {
+          mimeType: 'audio/wav',
           bitsPerSecond: 128000,
         },
       };
 
       const { recording, status: createStatus } = await Audio.Recording.createAsync(recordingOptions);
       recordingRef.current = recording;
-      console.log("Audio.Recording instance created. Initial status from createAsync:", createStatus);
+      console.log("High-quality WAV recording instance created:", createStatus);
 
       if (!createStatus.canRecord) {
-        throw new Error("Recording instance cannot record (status from createAsync) - check permissions and audio mode");
+        throw new Error("Recording instance cannot record - check permissions and audio mode");
       }
 
-      if (createStatus.isRecording) {
-        console.log("Recording already started by createAsync.");
-      } else {
-        console.log("Starting recording via startAsync()...");
+      if (!createStatus.isRecording) {
+        console.log("Starting recording...");
         await recording.startAsync();
         
-        // Small delay to ensure recording has actually started
         await new Promise(resolve => setTimeout(resolve, 50));
         
         const startedStatus = await recording.getStatusAsync();
-        console.log("Recording status after startAsync:", startedStatus);
-        
         if (!startedStatus.isRecording) {
-          throw new Error("Recording failed to start - status after startAsync indicates not recording");
+          throw new Error("Recording failed to start");
         }
-        console.log("expo-av audio recording started successfully via startAsync.");
+        console.log("WAV recording started successfully");
       }
       
       isRecordingRef.current = true;
-      setIsListening(true); // Update UI state to reflect recording
+      setIsListening(true);
+      
+      onPartialTranscript?.("Listening...");
+      
     } catch (error: any) {
       console.error("Error starting audio recording:", error);
       onError?.(`Failed to start audio recording: ${error.message}`);
       
-      // Ensure full cleanup in case of error during start
       if (recordingRef.current) {
         try {
-          console.log("Error handler: attempting to stop and unload recordingRef.");
           await recordingRef.current.stopAndUnloadAsync();
         } catch (cleanupError: any) {
-          console.warn(`Error handler: cleanup stopAndUnloadAsync failed: ${cleanupError.message}`);
+          console.warn(`Cleanup failed: ${cleanupError.message}`);
         }
         recordingRef.current = null;
       }
       isRecordingRef.current = false;
       setIsListening(false);
-    }
-  };
-
-  const processAudioRecording = async (uri: string) => {
-    try {
-      console.log(
-        `Processing recorded audio file for base64 conversion: ${uri}`
-      );
-      const fileInfo = await FileSystem.getInfoAsync(uri);
-      if (!fileInfo || !fileInfo.exists) {
-        console.error(
-          "Recorded audio file does not exist or info not available:",
-          uri
-        );
-        onError?.("Recorded audio file not found.");
-        return;
-      }
-
-      const base64 = await FileSystem.readAsStringAsync(uri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-
-      let mimeType = "application/octet-stream"; // Default
-      if (uri.endsWith(".m4a")) mimeType = "audio/m4a";
-      else if (uri.endsWith(".mp4")) mimeType = "audio/mp4";
-      else if (uri.endsWith(".aac")) mimeType = "audio/aac";
-      else if (uri.endsWith(".amr")) mimeType = "audio/amr";
-      else if (uri.endsWith(".3gp")) mimeType = "audio/3gpp";
-      else if (uri.endsWith(".wav")) mimeType = "audio/wav"; // If you manage to record WAV
-
-      console.log(
-        `Audio recorded and converted to base64. Length: ${base64.length}, URI: ${uri}, MIME Type: ${mimeType}`
-      );
-      onAudioRecorded?.({ base64, uri, mimeType });
-      setRecordedAudioUri(uri);
-    } catch (error: any) {
-      console.error(
-        "Error processing audio recording (base64 conversion):",
-        error
-      );
-      onError?.(`Failed to process audio recording: ${error.message}`);
     }
   };
 
@@ -288,12 +231,10 @@ export function useSpeechRecognition({
       isRecordingRef.current = false;
       return;
     }
-    console.log("Stopping audio recording (expo-av)...");
+    console.log("Stopping WAV audio recording...");
 
     try {
-      // Get the recording status before stopping
       const status = await recordingRef.current.getStatusAsync();
-      console.log("Recording status before stopping:", status);
       
       if (!status.canRecord || !status.isRecording) {
         console.warn("Recording is not in a recordable state:", status);
@@ -302,25 +243,81 @@ export function useSpeechRecognition({
       }
 
       await recordingRef.current.stopAndUnloadAsync();
-      const uri = recordingRef.current.getURI(); // Get URI after stopping
-      console.log("expo-av recording stopped. URI:", uri);
+      const uri = recordingRef.current.getURI();
+      console.log("WAV recording stopped successfully. URI:", uri);
 
       if (uri) {
-        await processAudioRecording(uri); // Process after stopping and getting URI
+        await processAudioRecording(uri);
       } else {
         console.warn("No URI found after stopping recording.");
         onError?.("Failed to get audio file URI after stopping.");
       }
     } catch (error: any) {
-      console.error("Error stopping expo-av recording:", error);
+      console.error("Error stopping WAV recording:", error);
       onError?.(`Failed to stop audio recording: ${error.message}`);
     } finally {
       recordingRef.current = null;
       isRecordingRef.current = false;
       setIsListening(false);
-      console.log(
-        "Audio recording process fully stopped and resources released."
-      );
+      console.log("WAV recording process fully stopped and resources released.");
+    }
+  };
+
+  const processAudioRecording = async (uri: string) => {
+    try {
+      console.log(`Processing high-quality WAV audio file: ${uri}`);
+      const fileInfo = await FileSystem.getInfoAsync(uri);
+      if (!fileInfo || !fileInfo.exists) {
+        console.error("Recorded audio file does not exist:", uri);
+        onError?.("Recorded audio file not found.");
+        return;
+      }
+
+      console.log(`WAV file size: ${AudioManager.formatFileSize(fileInfo.size || 0)}`);
+
+      // Ensure audio output directory exists
+      const audioOutputDir = await AudioManager.ensureAudioOutputDir();
+
+      // Generate unique filename
+      const savedFileName = AudioManager.generateFileName('wav');
+      const savedFilePath = `${audioOutputDir}${savedFileName}`;
+
+      // Copy the temporary recording to our permanent audio_output folder
+      await FileSystem.copyAsync({
+        from: uri,
+        to: savedFilePath,
+      });
+
+      console.log(`Audio file saved to: ${savedFilePath}`);
+
+      // Read the saved file as base64
+      const base64 = await FileSystem.readAsStringAsync(savedFilePath, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+
+      const mimeType = "audio/wav";
+      console.log(`WAV audio converted to base64. Length: ${base64.length} characters`);
+      console.log(`Estimated audio duration: ${(fileInfo.size / 176400).toFixed(1)}s`); // Rough estimate for 44.1kHz mono WAV
+      console.log(`Audio saved as: ${savedFileName}`);
+      
+      // Return the saved file path instead of temporary path
+      onAudioRecorded?.({ base64, uri: savedFilePath, mimeType });
+      setRecordedAudioUri(savedFilePath);
+
+      // Try to copy to project folder for development (this will only work in simulator/emulator)
+      // This operation will silently fail on actual devices which is expected behavior
+      await AudioManager.copyToProjectFolder(savedFilePath, savedFileName);
+
+      // Clean up temporary file
+      try {
+        await FileSystem.deleteAsync(uri);
+        console.log("Temporary audio file cleaned up");
+      } catch (cleanupError: any) {
+        console.warn("Failed to clean up temporary file:", cleanupError.message);
+      }
+    } catch (error: any) {
+      console.error("Error processing WAV audio recording:", error);
+      onError?.(`Failed to process audio recording: ${error.message}`);
     }
   };
 

@@ -18,6 +18,8 @@ import { MicrophoneButton } from "../components/MicrophoneButton";
 import { useSpeechRecognition } from "../hooks/useSpeechRecognition";
 import { useAppContext } from "../context/AppContext";
 import { createMessage } from "../utils/aiResponses";
+import { AudioManager } from "../utils/audioManager";
+import { BACKEND_URL } from "../config";
 import type { MainTabParamList, RootStackParamList } from "../types";
 
 type VoiceScreenNavigationProp = CompositeNavigationProp<
@@ -35,10 +37,12 @@ export function VoiceScreen() {
     uri: string | null;
     base64Length: number;
     mimeType?: string;
+    fileName?: string;
   } | null>(null);
 
   // State to hold the transcript received from the server for the user's speech
   const [userSpokenText, setUserSpokenText] = useState<string | null>(null);
+  const [partialTranscript, setPartialTranscript] = useState<string>("");
 
   const {
     isListening, // This now reflects expo-av recording state
@@ -53,7 +57,11 @@ export function VoiceScreen() {
       dispatch({ type: "SET_RECORDING", payload: false });
       setIsLoading(false);
     },
+    onPartialTranscript: (text) => {
+      setPartialTranscript(text);
+    },
     onAudioRecorded: async (audioInfo) => {
+      setPartialTranscript(""); // Clear partial transcript when full audio is recorded
       if (!audioInfo.base64 || !audioInfo.uri) {
         console.warn("Audio recorded but data is missing.");
         setRecordingStatus("Error: Failed to capture audio.");
@@ -67,22 +75,133 @@ export function VoiceScreen() {
         mimeType: audioInfo.mimeType,
         base64Length: audioInfo.base64.length,
       });
+      // Extract filename from URI for display
+      const fileName = audioInfo.uri ? audioInfo.uri.split('/').pop() || 'Unknown' : 'Unknown';
+      
       setLastRecordedAudioInfo({
         uri: audioInfo.uri,
         base64Length: audioInfo.base64.length,
         mimeType: audioInfo.mimeType,
+        fileName: fileName,
       });
       setUserSpokenText(null); // Clear previous user spoken text
 
-      // Prepare JSON data for your backend
+      // --- START: New logic as per request ---
+      // Save the recorded audio file locally
+      try {
+        const savedUri = await AudioManager.saveAudio(audioInfo.uri, fileName);
+        console.log(`Audio saved locally at: ${savedUri}`);
+        
+        // Update the info with the new permanent URI if needed
+        setLastRecordedAudioInfo(prev => prev ? { ...prev, uri: savedUri } : {
+          uri: savedUri,
+          base64Length: audioInfo.base64.length,
+          mimeType: audioInfo.mimeType,
+          fileName: fileName,
+        });
+
+      } catch (error) {
+        console.error("Failed to save audio locally:", error);
+      }
+
+      const endpoint = `${BACKEND_URL}/upload-audio/`;
+
+      setIsLoading(true);
+      setRecordingStatus("Uploading recorded audio...");
+
+      try {
+        const response = await fetch(endpoint, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            fileName: fileName,
+            audio_base64: audioInfo.base64,
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error(`Server error: ${response.status}`);
+        }
+
+        if (!response.body) {
+          throw new Error("Response body is null");
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+
+        let buffer = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) {
+            break;
+          }
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || ""; // Keep the last partial line
+
+          for (const line of lines) {
+            if (line.trim() === "") continue;
+            try {
+              const jsonData = JSON.parse(line);
+              console.log("Streamed data:", jsonData);
+
+              // Update UI based on streamed status
+              if (jsonData.status) {
+                setRecordingStatus(jsonData.message || `Status: ${jsonData.status}`);
+              }
+
+              if (jsonData.status === "transcribed") {
+                setUserSpokenText(jsonData.user_text);
+                const userMessage = createMessage(jsonData.user_text, "user");
+                dispatch({ type: "ADD_MESSAGE", payload: userMessage });
+              }
+
+              if (jsonData.status === "questions_pending") {
+                const aiMessage = createMessage(jsonData.questions, "ai");
+                dispatch({ type: "ADD_MESSAGE", payload: aiMessage });
+                speak(jsonData.questions);
+                navigation.navigate("Chat");
+              }
+
+              if (jsonData.status === "complete") {
+                const aiMessage = createMessage(jsonData.final_response_text, "ai");
+                dispatch({ type: "ADD_MESSAGE", payload: aiMessage });
+                speak(jsonData.final_response_text);
+                navigation.navigate("Chat");
+              }
+              
+              if (jsonData.status === "error") {
+                throw new Error(jsonData.error);
+              }
+
+            } catch (e: any) {
+              console.error("Error parsing streamed JSON:", e.message);
+            }
+          }
+        }
+      } catch (error: any) {
+        console.error("Audio Upload/Stream Error:", error.message);
+        setRecordingStatus(`Error: ${error.message}`);
+        Alert.alert("Stream Error", `Failed to process audio stream: ${error.message}`);
+      } finally {
+        setIsLoading(false);
+        dispatch({ type: "SET_RECORDING", payload: false });
+        setRecordingStatus("Tap to speak");
+      }
+      // --- END: New logic ---
+
+      /* --- START: Commenting out old logic ---
+      // Prepare JSON data for your backend (matching your expected format)
       const previousQuestionFromState =
         state.messages.filter((msg) => msg.sender === "ai").pop()?.text ||
         "Give me the patient Name, Age, Gender and Symptoms";
-      const userInfoFromState = { name: "John Doe", email: "john.doe@example.com" }; // Standardized email
+      const userInfoFromState = { name: "John Doe", email: "abc@xyz.com" };
 
       const serverPayload = {
         audio_bytes: audioInfo.base64,
-        audio_format: audioInfo.mimeType || 'audio/m4a',
         previous_question: previousQuestionFromState,
         user_info: userInfoFromState,
       };
@@ -92,10 +211,8 @@ export function VoiceScreen() {
         JSON.stringify(serverPayload).substring(0, 200) + "..."
       );
 
-      // Backend URL - using localhost for development
-      const YOUR_BACKEND_BASE_URL = Platform.OS === 'android'
-        ? "http://192.168.153.125:8000"  // Android emulator localhost
-        : "http://192.168.153.125:8000"; // iOS simulator and web
+      // Backend URL - ensure consistency with updated hook
+      const YOUR_BACKEND_BASE_URL = "http://192.168.204.73:8000";
       const endpoint = `${YOUR_BACKEND_BASE_URL}/process-response/`;
 
       setIsLoading(true);
@@ -141,16 +258,6 @@ export function VoiceScreen() {
         // Playback AI's audio response if provided
         if (responseData.audio_bytes) {
           console.log("AI audio (base64) received, attempting playback...");
-          // TODO: Implement playback of the received base64 audio using expo-speech or expo-av
-          // For expo-speech (if it's just text to be spoken by AI voice):
-          // speak(responseData.questions); // Already done above if questions is the text
-          // For expo-av (if server sends actual audio bytes for AI voice):
-          // const soundObject = new Audio.Sound();
-          // try {
-          //   await Audio.setAudioModeAsync({ playsInSilentModeIOS: true });
-          //   await soundObject.loadAsync({ uri: `data:audio/wav;base64,${responseData.audio_bytes}` }); // Adjust MIME type if not WAV
-          //   await soundObject.playAsync();
-          // } catch (e) { console.error("Failed to play AI audio response", e); }
         }
 
         setRecordingStatus("Response received. Tap to speak.");
@@ -165,6 +272,7 @@ export function VoiceScreen() {
         setIsLoading(false);
         dispatch({ type: "SET_RECORDING", payload: false }); // Ensure recording state in context is false
       }
+      --- END: Commenting out old logic --- */
     },
   });
 
@@ -219,11 +327,8 @@ export function VoiceScreen() {
         "Give me the patient Name, Age, Gender and Symptoms";
       const userInfoFromState = { name: "John Doe", email: "abc@xyz.com" };
 
-      // Backend URL for text processing
-      const YOUR_BACKEND_BASE_URL = Platform.OS === 'android'
-        ? "http://10.0.2.2:8000"
-        : "http://localhost:8000";
-      const textEndpoint = `${YOUR_BACKEND_BASE_URL}/process-text/`;
+      // Backend URL for text processing - use same URL as voice processing
+      const textEndpoint = `${BACKEND_URL}/process-text/`;
 
       const payload = {
         user_text: suggestionText,
@@ -279,6 +384,11 @@ export function VoiceScreen() {
     "How much water should I drink daily?",
   ];
 
+  const navigateToAudioFiles = () => {
+    // @ts-ignore - AudioFiles screen will be added to navigation
+    navigation.navigate('AudioFiles');
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
@@ -288,12 +398,24 @@ export function VoiceScreen() {
           </View>
         </View>
         <Text style={styles.headerTitle}>Med-Conscious</Text>
-        <TouchableOpacity
-          style={styles.headerRight}
-          onPress={() => navigation.navigate("Settings")}
-        >
-          <MaterialIcon name="settings" size={24} color="#FFFFFF" />
-        </TouchableOpacity>
+        <View style={styles.headerRight}>
+          <TouchableOpacity
+            style={styles.headerButton}
+            onPress={navigateToAudioFiles}
+          >
+            <MaterialIcon
+              name="folder"
+              size={24}
+              color="#FFFFFF"
+            />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.headerButton}
+            onPress={() => navigation.navigate("Settings")}
+          >
+            <MaterialIcon name="settings" size={24} color="#FFFFFF" />
+          </TouchableOpacity>
+        </View>
       </View>
 
       <ScrollView
@@ -311,6 +433,14 @@ export function VoiceScreen() {
               (hasAudioRecordingPermission === false && Platform.OS !== "web")
             }
           />
+          {/* Show partial transcript while listening */}
+          {isListening && partialTranscript && (
+            <View style={styles.transcriptContainer}>
+              <Text style={styles.transcriptLabel}>Listening:</Text>
+              <Text style={styles.transcriptText}>"{partialTranscript}"</Text>
+            </View>
+          )}
+
           <Text style={styles.recordingStatus}>
             {isLoading ? "Processing..." : recordingStatus}
           </Text>
@@ -325,14 +455,20 @@ export function VoiceScreen() {
 
           {lastRecordedAudioInfo && lastRecordedAudioInfo.uri && (
             <View style={styles.audioInfoContainer}>
-              <Text style={styles.audioInfoLabel}>Last recording:</Text>
+              <Text style={styles.audioInfoLabel}>Last recording saved:</Text>
               <Text style={styles.audioInfoText}>
-                Type: {lastRecordedAudioInfo.mimeType || "N/A"}, Size:{" "}
-                {(lastRecordedAudioInfo.base64Length / 1024).toFixed(1)} KB
+                {lastRecordedAudioInfo.fileName}
               </Text>
-              {/* <Text style={styles.audioInfoText}>
-                URI: {lastRecordedAudioInfo.uri.split("/").pop()}
-              </Text> */}
+              <Text style={styles.audioInfoText}>
+                Type: {lastRecordedAudioInfo.mimeType || "N/A"} • Size: {AudioManager.formatFileSize(lastRecordedAudioInfo.base64Length)}
+              </Text>
+              <TouchableOpacity
+                style={styles.viewFilesButton}
+                onPress={navigateToAudioFiles}
+              >
+                <MaterialIcon name="folder-open" size={16} color="#007AFF" />
+                <Text style={styles.viewFilesText}>View All Recordings</Text>
+              </TouchableOpacity>
             </View>
           )}
 
@@ -394,8 +530,32 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   headerRight: {
-    width: 40,
-    alignItems: "flex-end",
+    flexDirection: 'row',
+    alignItems: 'center',
+    width: 80,
+    justifyContent: 'flex-end',
+  },
+  headerButton: {
+    marginLeft: 8,
+    padding: 4,
+  },
+  viewFilesButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    backgroundColor: '#1E1E1E',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#007AFF',
+  },
+  viewFilesText: {
+    color: '#007AFF',
+    fontSize: 12,
+    fontWeight: '500',
+    marginLeft: 4,
   },
   content: {
     flex: 1,
