@@ -11,6 +11,7 @@ interface UseAudioRecorderProps {
     uri: string | null;
     mimeType?: string;
   }) => void;
+  onPlaybackFinished?: () => void;
 }
 
 // Consider renaming the hook to useAudioRecorder in the future if STT is fully removed from its responsibilities.
@@ -18,12 +19,15 @@ interface UseAudioRecorderProps {
 export function useSpeechRecognition({
   onError,
   onAudioRecorded,
+  onPlaybackFinished,
 }: UseAudioRecorderProps = {}) {
   const [isListening, setIsListening] = useState(false); // True when actively recording audio
+  const [isPlaying, setIsPlaying] = useState(false); // True when playing back recorded audio
   const [hasAudioRecordingPermission, setHasAudioRecordingPermission] =
     useState<boolean | null>(null);
   const isRecordingRef = useRef(false); // To track internal recording state reliably
   const recordingRef = useRef<Audio.Recording | null>(null);
+  const soundRef = useRef<Audio.Sound | null>(null);
   const [recordedAudioUri, setRecordedAudioUri] = useState<string | null>(null);
 
   useEffect(() => {
@@ -166,29 +170,27 @@ export function useSpeechRecognition({
         playThroughEarpieceAndroid: false,
       });
 
-      // Create recording with simplified, more reliable options
+      // Create recording with optimized settings for speech recognition
       console.log("Creating Audio.Recording instance...");
       const recordingOptions = {
         android: {
-          extension: '.wav',
-          outputFormat: Audio.AndroidOutputFormat.DEFAULT, // Attempt to get WAV output
-          audioEncoder: Audio.AndroidAudioEncoder.DEFAULT, // Use default encoder
+          extension: '.m4a',
+          outputFormat: Audio.AndroidOutputFormat.MPEG_4,
+          audioEncoder: Audio.AndroidAudioEncoder.AAC,
           sampleRate: 44100,
           numberOfChannels: 1,
+          bitRate: 128000,
         },
         ios: {
-          extension: '.wav',
-          outputFormat: Audio.IOSOutputFormat.LINEARPCM, // This is for WAV
+          extension: '.m4a',
+          outputFormat: Audio.IOSOutputFormat.MPEG4AAC,
+          audioQuality: Audio.IOSAudioQuality.MEDIUM,
           sampleRate: 44100,
           numberOfChannels: 1,
-          audioQuality: Audio.IOSAudioQuality.MEDIUM, // Required by type, may be ignored for LINEARPCM
-          bitRate: 128000, // Required by type, may be ignored for LINEARPCM
-          linearPCMBitDepth: 16, // Specify bit depth for PCM
-          linearPCMIsFloat: false, // Specify float for PCM
-          linearPCMIsBigEndian: false, // Specify endianness for PCM
+          bitRate: 128000,
         },
-        web: { // Web settings remain, though this hook focuses on native
-          mimeType: 'audio/wav', // Consistent with WAV attempt
+        web: {
+          mimeType: 'audio/webm;codecs=opus',
           bitsPerSecond: 128000,
         },
       };
@@ -259,13 +261,15 @@ export function useSpeechRecognition({
         encoding: FileSystem.EncodingType.Base64,
       });
 
-      let mimeType = "application/octet-stream"; // Default
+      let mimeType = "audio/m4a"; // Default to m4a since that's what we're recording
       if (uri.endsWith(".m4a")) mimeType = "audio/m4a";
       else if (uri.endsWith(".mp4")) mimeType = "audio/mp4";
       else if (uri.endsWith(".aac")) mimeType = "audio/aac";
       else if (uri.endsWith(".amr")) mimeType = "audio/amr";
       else if (uri.endsWith(".3gp")) mimeType = "audio/3gpp";
-      else if (uri.endsWith(".wav")) mimeType = "audio/wav"; // If you manage to record WAV
+      else if (uri.endsWith(".wav")) mimeType = "audio/wav";
+      else if (uri.endsWith(".webm")) mimeType = "audio/webm";
+      else if (uri.endsWith(".ogg")) mimeType = "audio/ogg";
 
       console.log(
         `Audio recorded and converted to base64. Length: ${base64.length}, URI: ${uri}, MIME Type: ${mimeType}`
@@ -278,6 +282,72 @@ export function useSpeechRecognition({
         error
       );
       onError?.(`Failed to process audio recording: ${error.message}`);
+    }
+  };
+
+  const playRecordedAudio = async (uri?: string) => {
+    const audioUri = uri || recordedAudioUri;
+    if (!audioUri) {
+      onError?.("No recorded audio to play");
+      return;
+    }
+
+    try {
+      console.log("Playing recorded audio:", audioUri);
+      setIsPlaying(true);
+
+      // Stop any existing playback
+      if (soundRef.current) {
+        await soundRef.current.unloadAsync();
+        soundRef.current = null;
+      }
+
+      // Set audio mode for playback
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        playsInSilentModeIOS: true,
+        staysActiveInBackground: false,
+        shouldDuckAndroid: true,
+        playThroughEarpieceAndroid: false,
+      });
+
+      // Create and load sound
+      const { sound } = await Audio.Sound.createAsync(
+        { uri: audioUri },
+        { shouldPlay: true }
+      );
+      
+      soundRef.current = sound;
+
+      // Set up playback status update
+      sound.setOnPlaybackStatusUpdate((status) => {
+        if (status.isLoaded && status.didJustFinish) {
+          console.log("Audio playback finished");
+          setIsPlaying(false);
+          onPlaybackFinished?.();
+        }
+      });
+
+      console.log("Audio playback started successfully");
+    } catch (error: any) {
+      console.error("Error playing recorded audio:", error);
+      setIsPlaying(false);
+      onError?.(`Failed to play recorded audio: ${error.message}`);
+    }
+  };
+
+  const stopPlayback = async () => {
+    if (soundRef.current) {
+      try {
+        await soundRef.current.stopAsync();
+        await soundRef.current.unloadAsync();
+        soundRef.current = null;
+        setIsPlaying(false);
+        console.log("Audio playback stopped");
+      } catch (error: any) {
+        console.error("Error stopping audio playback:", error);
+        onError?.(`Failed to stop audio playback: ${error.message}`);
+      }
     }
   };
 
@@ -324,6 +394,18 @@ export function useSpeechRecognition({
     }
   };
 
+  // Cleanup effect for sound playback
+  useEffect(() => {
+    return () => {
+      if (soundRef.current) {
+        console.log("Cleanup: unloading sound on unmount");
+        soundRef.current.unloadAsync().catch((e) =>
+          console.error("Error unloading sound on unmount", e)
+        );
+      }
+    };
+  }, []);
+
   const speak = async (text: string) => {
     try {
       await Speech.speak(text, {
@@ -347,11 +429,14 @@ export function useSpeechRecognition({
 
   return {
     isListening,
+    isPlaying,
     hasAudioRecordingPermission,
     recordedAudioUri,
     startListening,
     stopListening,
     toggle,
     speak,
+    playRecordedAudio,
+    stopPlayback,
   };
 }

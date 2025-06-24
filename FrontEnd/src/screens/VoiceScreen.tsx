@@ -42,10 +42,13 @@ export function VoiceScreen() {
 
   const {
     isListening, // This now reflects expo-av recording state
+    isPlaying, // True when playing back recorded audio
     hasAudioRecordingPermission,
     toggle, // Renamed from start/stopListening pair for simplicity if preferred
     speak,
-    // recordedAudioUri, // Available if needed for display
+    playRecordedAudio, // Function to play back recorded audio
+    stopPlayback, // Function to stop audio playback
+    recordedAudioUri, // Available for display and playback
   } = useSpeechRecognition({
     onError: (error) => {
       console.error("Audio Hook Error:", error);
@@ -73,6 +76,14 @@ export function VoiceScreen() {
         mimeType: audioInfo.mimeType,
       });
       setUserSpokenText(null); // Clear previous user spoken text
+
+      // Automatically play the recorded audio after a brief delay
+      setTimeout(() => {
+        if (audioInfo.uri) {
+          setRecordingStatus("Playing your recording...");
+          playRecordedAudio(audioInfo.uri);
+        }
+      }, 1000);
 
       // Prepare JSON data for your backend
       const previousQuestionFromState =
@@ -166,6 +177,10 @@ export function VoiceScreen() {
         dispatch({ type: "SET_RECORDING", payload: false }); // Ensure recording state in context is false
       }
     },
+    onPlaybackFinished: () => {
+      console.log("Audio playback finished");
+      setRecordingStatus("Playback finished. Tap to speak.");
+    },
   });
 
   // Effect to update recording status based on hook's isListening state
@@ -189,16 +204,28 @@ export function VoiceScreen() {
       "Mic pressed. Current isListening (from hook):",
       isListening,
       "isLoading:",
-      isLoading
+      isLoading,
+      "isPlaying:",
+      isPlaying
     );
-    if (isLoading) {
-      console.log("Mic press ignored, currently loading API response.");
-      return; // Don't toggle if already processing a request
+    if (isLoading || isPlaying) {
+      console.log("Mic press ignored, currently loading API response or playing audio.");
+      return; // Don't toggle if already processing a request or playing audio
     }
 
     // The `toggle` function from the hook now handles starting/stopping the expo-av recording.
     // The `isListening` state from the hook will change, and the useEffect above will update UI.
     toggle();
+  };
+
+  const handlePlayRecording = () => {
+    if (isPlaying) {
+      stopPlayback();
+      setRecordingStatus("Playback stopped. Tap to speak.");
+    } else if (recordedAudioUri || lastRecordedAudioInfo?.uri) {
+      setRecordingStatus("Playing recorded audio...");
+      playRecordedAudio(lastRecordedAudioInfo?.uri || recordedAudioUri || undefined);
+    }
   };
 
   // Handle "Try Saying" suggestions by sending them to the server as text
@@ -308,6 +335,7 @@ export function VoiceScreen() {
             size={120}
             disabled={
               isLoading ||
+              isPlaying ||
               (hasAudioRecordingPermission === false && Platform.OS !== "web")
             }
           />
@@ -330,9 +358,23 @@ export function VoiceScreen() {
                 Type: {lastRecordedAudioInfo.mimeType || "N/A"}, Size:{" "}
                 {(lastRecordedAudioInfo.base64Length / 1024).toFixed(1)} KB
               </Text>
-              {/* <Text style={styles.audioInfoText}>
-                URI: {lastRecordedAudioInfo.uri.split("/").pop()}
-              </Text> */}
+              <TouchableOpacity
+                style={[
+                  styles.playButton,
+                  isPlaying && styles.playButtonActive,
+                ]}
+                onPress={handlePlayRecording}
+                disabled={isLoading || isListening}
+              >
+                <MaterialIcon
+                  name={isPlaying ? "stop" : "play-arrow"}
+                  size={20}
+                  color="#FFFFFF"
+                />
+                <Text style={styles.playButtonText}>
+                  {isPlaying ? "Stop Playback" : "Play Recording"}
+                </Text>
+              </TouchableOpacity>
             </View>
           )}
 
@@ -485,5 +527,25 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#FFFFFF",
     textAlign: "center",
+  },
+  playButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#007AFF",
+    paddingHorizontal: 15,
+    paddingVertical: 8,
+    borderRadius: 20,
+    marginTop: 8,
+    minWidth: 120,
+  },
+  playButtonActive: {
+    backgroundColor: "#dc2626",
+  },
+  playButtonText: {
+    color: "#FFFFFF",
+    fontSize: 12,
+    fontWeight: "500",
+    marginLeft: 5,
   },
 });

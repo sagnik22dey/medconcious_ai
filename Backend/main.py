@@ -22,8 +22,10 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Store conversation history
+# Store conversation history and current stage
 conversation_history: List[Dict] = []
+current_stage: str = "initiate_chat"  # Tracks current workflow stage
+stage_data: Dict = {}  # Stores data accumulated through stages
 
 @app.post("/initiate-chat/")
 async def initiate_chat(patient_info_payload: dict = Body(...)):
@@ -208,8 +210,9 @@ async def process_voice_integrated(request_data: dict = Body(...)):
 @app.post("/process-response/")
 async def process_response(request_data: dict = Body(...)):
     """
-    Process patient response, generate follow-up questions, or
-    generate diagnosis and report if all information is gathered.
+    Process patient response and determine next stage based on LLM flags.
+    
+    Workflow: initiate_chat -> process_response -> generate_diagnosis -> generate_prescription -> generate_report
     
     Payload process-response:
     {
@@ -218,10 +221,11 @@ async def process_response(request_data: dict = Body(...)):
         "user_info": { # Basic identification info
             "name": "John Doe",
             "email":"abc@xyz.com"
-            }
+        },
+        "current_stage": "process_response" # Optional, will be determined automatically
     }
     """
-    global conversation_history
+    global conversation_history, current_stage, stage_data
     try:
         audio_bytes_b64 = request_data['audio_bytes']
         previous_question_text = request_data.get('previous_question', '')
@@ -235,7 +239,8 @@ async def process_response(request_data: dict = Body(...)):
         else:
             # Decode and process audio
             audio_bytes_val = base64.b64decode(audio_bytes_b64)
-            patient_response_text = speech_to_text(audio_bytes_val)
+            audio_format = request_data.get('audio_format', 'audio/m4a')
+            patient_response_text = speech_to_text(audio_bytes_val, audio_format)
         
         # Update conversation history with user's response
         conversation_history.append({
@@ -244,70 +249,66 @@ async def process_response(request_data: dict = Body(...)):
             "user_info": current_user_info
         })
         
-        # Generate follow-up questions.
-        # Assumes generate_followup_questions uses conversation context (implicitly or explicitly)
-        # and returns an empty string/list if no more questions are needed.
+        # Generate follow-up questions with stage progression flag
         followup_payload = {
             "Assistant": previous_question_text,
-            "user": patient_response_text
-            # Ideally, this function should take conversation_history.
+            "user": patient_response_text,
+            "conversation_history": conversation_history
         }
-        generated_questions_text = generate_followup_questions(followup_payload)
         
-        if generated_questions_text and generated_questions_text.strip(): # If there are more questions
+        followup_result = generate_followup_questions(followup_payload)
+        
+        # Parse the result to check for ready_for_diagnosis flag
+        import json
+        try:
+            if isinstance(followup_result, str):
+                followup_data = json.loads(followup_result)
+            else:
+                followup_data = followup_result
+        except:
+            # Fallback for old format
+            followup_data = {"content": followup_result, "ready_for_diagnosis": False}
+        
+        ready_for_diagnosis = followup_data.get("ready_for_diagnosis", False)
+        
+        if not ready_for_diagnosis and followup_data.get("content"):
+            # More questions needed
+            content = followup_data["content"]
+            if isinstance(content, list):
+                questions_text = " ".join(str(q) for q in content)
+            elif isinstance(content, str):
+                questions_text = content
+            else:
+                questions_text = str(content)
+            
             conversation_history.append({
                 "role": "assistant",
-                "content": generated_questions_text
+                "content": questions_text
             })
             
             return JSONResponse({
                 "message": "Response processed successfully. Please answer the following questions.",
                 "user_text": patient_response_text,
-                "questions": generated_questions_text,
+                "questions": questions_text,
+                "current_stage": "process_response",
+                "next_stage": "process_response",  # Stay in same stage
                 "status": "questions_pending"
             })
-        else: # No more questions, proceed to diagnosis and report
-            # --- Generate Diagnosis ---
-            # Assumes generate_differential_diagnosis primarily uses conversation_history for clinical context.
-            diagnosis_payload = {
-                "symptoms": patient_response_text,  # The most recent user response
-                "history": conversation_history,    # The full conversation
-                "previous_questions": previous_question_text, # The last AI question that prompted the user_response
-                "Patient_Info": current_user_info   # User's demographic info
-            }
-            diagnosis_text = generate_differential_diagnosis(diagnosis_payload)
-
-            # --- Generate Medical Report ---
-            # Assumes generate_medical_report uses conversation_history for clinical details (age, gender, symptoms etc.)
-            # and patient_data["patient_info"] for basic demographics.
-            report_patient_data = {
-                "diagnosis": diagnosis_text,
-                "patient_info": current_user_info
-            }
-            final_report_markdown = generate_medical_report(conversation_history, report_patient_data)
+        else:
+            # Ready for diagnosis - advance to next stage
+            current_stage = "generate_diagnosis"
+            stage_data["user_responses"] = [msg for msg in conversation_history if msg["role"] == "user"]
             
-            conversation_history.append({
-                "role": "assistant",
-                "content": f"Generated Diagnosis: {diagnosis_text}"
-            })
-            conversation_history.append({
-                "role": "assistant",
-                "content": f"Generated Report (markdown): {final_report_markdown}" # Log report for audit
-            })
-
-            summary_for_speech = f"I have completed the diagnosis. The key finding is: {diagnosis_text}. Please review the detailed report."
-            if len(diagnosis_text) > 150: # Keep spoken summary relatively brief
-                summary_for_speech = f"I have completed the diagnosis and generated a report. Please review the detailed report for findings."
-            elif not diagnosis_text:
-                 summary_for_speech = "I have completed the consultation and generated a report for you. Please review the details."
- 
             return JSONResponse({
-                "message": "Consultation complete. Diagnosis and report generated.",
+                "message": "Sufficient information gathered. Ready for diagnosis.",
                 "user_text": patient_response_text,
-                "diagnosis_text": diagnosis_text,
-                "report_markdown": final_report_markdown,
-                "final_response_text": summary_for_speech,
-                "status": "complete"
+                "current_stage": "process_response",
+                "next_stage": "generate_diagnosis",
+                "status": "ready_for_diagnosis",
+                "stage_data": {
+                    "patient_summary": followup_data.get("patient_summary", {}),
+                    "total_responses": len([msg for msg in conversation_history if msg["role"] == "user"])
+                }
             })
 
     except Exception as e:
@@ -324,152 +325,327 @@ async def process_response(request_data: dict = Body(...)):
 @app.post("/generate-diagnosis/")
 async def generate_diagnosis(request_data: dict = Body(...)):
     """
-    Generate differential diagnosis based on patient responses
+    Generate differential diagnosis and determine if ready for prescription stage.
     
     Payload generate-diagnosis:
     {
-        "audio_bytes": "<base64_encoded_audio>",
-        "previous_questions": "Follow-up questions",
-        "Patient_Info": {
-            "name": "John Doe",
-            "age": 30,
-            "gender":"male",
-            "symptoms": "fever, cough",
-            "medical_history": "No known allergies"
-        },
         "user_info": {
             "name": "John Doe",
             "email":"abc@xyz.com"
-        }  
+        },
+        "audio_bytes": "<optional_base64_encoded_audio>",
+        "text_input": "<optional_text_input>",
+        "stage_data": {
+            "patient_summary": {...},
+            "conversation_history": [...]
+        }
     }
     """
+    global conversation_history, current_stage, stage_data
     try:
-        # Decode audio to text
-        audio_bytes = base64.b64decode(request_data['audio_bytes'])
-        patient_response = speech_to_text(audio_bytes)
+        current_user_info = request_data.get('user_info', {})
+        
+        # Handle optional additional input
+        additional_input = ""
+        if request_data.get('audio_bytes'):
+            audio_bytes = base64.b64decode(request_data['audio_bytes'])
+            audio_format = request_data.get('audio_format', 'audio/m4a')
+            additional_input = speech_to_text(audio_bytes, audio_format)
+        elif request_data.get('text_input'):
+            additional_input = request_data['text_input']
+        
+        if additional_input:
+            conversation_history.append({
+                "role": "user",
+                "content": additional_input,
+                "user_info": current_user_info
+            })
+        
+        # Generate differential diagnosis with stage progression flag
+        diagnosis_payload = {
+            "symptoms": additional_input or "Based on conversation history",
+            "history": conversation_history,
+            "previous_questions": "",
+            "Patient_Info": current_user_info
+        }
+        
+        diagnosis_result = generate_differential_diagnosis(diagnosis_payload)
+        
+        # Parse diagnosis result to check for ready_for_prescription flag
+        import json
+        try:
+            if isinstance(diagnosis_result, str):
+                diagnosis_data = json.loads(diagnosis_result)
+            else:
+                diagnosis_data = diagnosis_result
+        except:
+            # Fallback for old format
+            diagnosis_data = {
+                "differential_diagnosis": diagnosis_result,
+                "ready_for_prescription": True,  # Default to ready
+                "primary_diagnosis": "Diagnosis needs review"
+            }
+        
+        ready_for_prescription = diagnosis_data.get("ready_for_prescription", True)
+        primary_diagnosis = diagnosis_data.get("primary_diagnosis", "See differential diagnosis")
         
         # Update conversation history
         conversation_history.append({
-            "role": "user",
-            "content": patient_response
+            "role": "assistant",
+            "content": f"Diagnosis generated: {primary_diagnosis}"
         })
         
-        # Generate differential diagnosis
-        diagnosis = generate_differential_diagnosis({
-            "symptoms": patient_response,
-            "history": conversation_history,
-            "previous_questions": request_data.get('previous_questions', '')
-        })
+        # Store diagnosis data for next stage
+        stage_data["diagnosis_data"] = diagnosis_data
         
-        # Convert diagnosis to speech
-        # diagnosis_audio = text_to_speech(diagnosis)
-        # diagnosis_audio_base64 = base64.b64encode(diagnosis_audio).decode('utf-8')
+        if ready_for_prescription:
+            # Advance to prescription stage
+            current_stage = "generate_prescription"
+            next_stage = "generate_prescription"
+            status = "ready_for_prescription"
+            message = "Diagnosis completed. Ready to generate prescription."
+        else:
+            # Stay in diagnosis stage, may need more information
+            next_stage = "generate_diagnosis"
+            status = "diagnosis_uncertain"
+            message = "Diagnosis generated but requires further evaluation before prescription."
         
         return JSONResponse({
-            "message": "Diagnosis generated successfully",
-            "user_text": patient_response,
-            "diagnosis": diagnosis
-            # "audio_bytes": diagnosis_audio_base64
+            "message": message,
+            "user_text": additional_input,
+            "diagnosis_data": diagnosis_data,
+            "primary_diagnosis": primary_diagnosis,
+            "confidence_level": diagnosis_data.get("confidence_level", "Medium"),
+            "current_stage": "generate_diagnosis",
+            "next_stage": next_stage,
+            "status": status,
+            "ready_for_prescription": ready_for_prescription
         })
 
     except Exception as e:
         print(f"Error in generate_diagnosis: {str(e)}")
         return JSONResponse(
             status_code=500,
-            content={"error": str(e)}
+            content={"error": str(e), "status": "error"}
         )
 
 @app.post("/generate-prescription/")
 async def generate_prescription(request_data: dict = Body(...)):
     """
-    Generate prescription based on chosen diagnosis
+    Generate prescription based on diagnosis and determine if ready for final report.
     
     payload generate-prescription:
-    {   
+    {
         "user_info": {
             "name": "John Doe",
             "email":"abc@xyz.com"
         },
-        "Patient_Info": {
-            "name": "John Doe",
-            "age": 30,
-            "gender":"male",
-            "symptoms": "fever, cough",
-            "medical_history": "No known allergies"
+        "chosen_diagnosis": "Primary diagnosis name",
+        "diagnosis_data": {
+            "differential_diagnosis": [...],
+            "primary_diagnosis": "...",
+            "confidence_level": "High/Medium/Low"
         },
-        "follow_up_questions": "Follow-up questions",
-        "answer": "Patient response",
-        "chosen_diagnosis": "Diagnosis",
+        "additional_notes": "Optional additional input from patient"
     }
-            
     """
+    global conversation_history, current_stage, stage_data
     try:
-        # Generate medical report
-        prescription = generate_medical_report(
-            conversation_history=conversation_history,
-            patient_data={
-                "chosen_diagnosis": request_data.get('chosen_diagnosis'),
-                "patient_info": request_data.get('patient_info', {})
+        from static.helper_files.prompts import PRESCRIPTION_GENERATION_PROMPT
+        from static.helper_files.llm import generate_llm_response
+        from static.helper_files.functions import parse_text_to_json
+        
+        current_user_info = request_data.get('user_info', {})
+        chosen_diagnosis = request_data.get('chosen_diagnosis', '')
+        diagnosis_data = request_data.get('diagnosis_data', stage_data.get('diagnosis_data', {}))
+        additional_notes = request_data.get('additional_notes', '')
+        
+        if additional_notes:
+            conversation_history.append({
+                "role": "user",
+                "content": additional_notes,
+                "user_info": current_user_info
+            })
+        
+        # Prepare prescription generation payload
+        prescription_payload = {
+            "diagnosis": chosen_diagnosis or diagnosis_data.get('primary_diagnosis', ''),
+            "patient_info": current_user_info,
+            "diagnosis_data": diagnosis_data,
+            "conversation_history": conversation_history
+        }
+        
+        # Generate prescription using the new prompt
+        prompt = f"system instruction:{PRESCRIPTION_GENERATION_PROMPT}\n\nPrescription Data: {prescription_payload}"
+        
+        prescription_result = generate_llm_response(prompt=prompt)
+        
+        # Parse prescription result to check for ready_for_report flag
+        import json
+        try:
+            if isinstance(prescription_result, str):
+                prescription_data = json.loads(prescription_result)
+            else:
+                prescription_data = prescription_result
+        except:
+            # Fallback for old format
+            prescription_data = {
+                "prescription": prescription_result,
+                "ready_for_report": True,  # Default to ready
+                "confidence_level": "Medium"
             }
-        )
+        
+        ready_for_report = prescription_data.get("ready_for_report", True)
+        
+        # Update conversation history
+        conversation_history.append({
+            "role": "assistant",
+            "content": f"Prescription generated for {chosen_diagnosis}"
+        })
+        
+        # Store prescription data for next stage
+        stage_data["prescription_data"] = prescription_data
+        
+        if ready_for_report:
+            # Advance to final report stage
+            current_stage = "generate_report"
+            next_stage = "generate_report"
+            status = "ready_for_report"
+            message = "Prescription completed. Ready to generate final report."
+        else:
+            # Stay in prescription stage, may need modifications
+            next_stage = "generate_prescription"
+            status = "prescription_review_needed"
+            message = "Prescription generated but may need review or modification."
         
         return JSONResponse({
-            "message": "Prescription generated successfully",
-            "prescription": prescription
+            "message": message,
+            "prescription_data": prescription_data,
+            "prescription_summary": prescription_data.get("prescription", {}),
+            "confidence_level": prescription_data.get("confidence_level", "Medium"),
+            "current_stage": "generate_prescription",
+            "next_stage": next_stage,
+            "status": status,
+            "ready_for_report": ready_for_report
         })
 
     except Exception as e:
         print(f"Error in generate_prescription: {str(e)}")
         return JSONResponse(
             status_code=500,
-            content={"error": str(e)}
+            content={"error": str(e), "status": "error"}
         )
 
 @app.post("/generate-report/")
 async def generate_report(request_data: dict = Body(...)):
     """
-    Generate markdown report for PDF conversion
+    Generate final comprehensive medical report and complete the consultation workflow.
 
     payload generate-report:
-    {   
+    {
         "user_info": {
             "name": "John Doe",
             "email":"abc@xyz.com"
         },
-        "Patient_Info": {
-            "name": "John Doe",
-            "age": 30,
-            "gender":"male",
-            "symptoms": "fever, cough",
-            "medical_history": "No known allergies"
+        "diagnosis_data": {
+            "primary_diagnosis": "...",
+            "differential_diagnosis": [...]
         },
-        "prescription": "Prescription"
+        "prescription_data": {
+            "prescription": {...},
+            "medications": [...]
+        },
+        "additional_notes": "Optional final notes"
     }
-            
     """
-
+    global conversation_history, current_stage, stage_data
     try:
-        # Generate detailed markdown report
-        report = generate_medical_report(
-            conversation_history=conversation_history,
-            patient_data={
-                "diagnosis": request_data.get('diagnosis'),
-                "prescription": request_data.get('prescription'),
-                "patient_info": request_data.get('patient_info', {}),
-                "doctor_info": request_data.get('doctor_info', {})
+        from static.helper_files.prompts import FINAL_REPORT_GENERATION_PROMPT
+        from static.helper_files.llm import generate_llm_response
+        
+        current_user_info = request_data.get('user_info', {})
+        diagnosis_data = request_data.get('diagnosis_data', stage_data.get('diagnosis_data', {}))
+        prescription_data = request_data.get('prescription_data', stage_data.get('prescription_data', {}))
+        additional_notes = request_data.get('additional_notes', '')
+        
+        if additional_notes:
+            conversation_history.append({
+                "role": "user",
+                "content": additional_notes,
+                "user_info": current_user_info
+            })
+        
+        # Prepare comprehensive report generation payload
+        report_payload = {
+            "patient_info": current_user_info,
+            "conversation_history": conversation_history,
+            "diagnosis_data": diagnosis_data,
+            "prescription_data": prescription_data,
+            "consultation_summary": {
+                "total_interactions": len([msg for msg in conversation_history if msg["role"] == "user"]),
+                "stages_completed": ["initiate_chat", "process_response", "generate_diagnosis", "generate_prescription", "generate_report"],
+                "primary_diagnosis": diagnosis_data.get('primary_diagnosis', 'Not specified'),
+                "prescription_provided": bool(prescription_data)
             }
-        )
+        }
+        
+        # Generate final comprehensive report
+        prompt = f"system instruction:{FINAL_REPORT_GENERATION_PROMPT}\n\nReport Data: {report_payload}"
+        
+        report_result = generate_llm_response(prompt=prompt)
+        
+        # Parse report result
+        import json
+        try:
+            if isinstance(report_result, str):
+                report_data = json.loads(report_result)
+            else:
+                report_data = report_result
+        except:
+            # Fallback for old format
+            report_data = {
+                "medical_report": report_result,
+                "consultation_complete": True,
+                "summary": "Consultation completed successfully"
+            }
+        
+        # Mark consultation as complete
+        current_stage = "completed"
+        consultation_complete = report_data.get("consultation_complete", True)
+        
+        # Update conversation history with final report
+        conversation_history.append({
+            "role": "assistant",
+            "content": "Final medical report generated. Consultation completed."
+        })
+        
+        # Store final report data
+        stage_data["final_report"] = report_data
         
         return JSONResponse({
-            "message": "Report generated successfully",
-            "markdown_content": report
+            "message": "Comprehensive medical report generated successfully. Consultation completed.",
+            "report_data": report_data,
+            "medical_report": report_data.get("medical_report", {}),
+            "summary": report_data.get("summary", ""),
+            "next_steps": report_data.get("next_steps", ""),
+            "current_stage": "generate_report",
+            "next_stage": "completed",
+            "status": "consultation_complete",
+            "consultation_complete": consultation_complete,
+            "workflow_summary": {
+                "stages_completed": ["initiate_chat", "process_response", "generate_diagnosis", "generate_prescription", "generate_report"],
+                "total_user_interactions": len([msg for msg in conversation_history if msg["role"] == "user"]),
+                "final_diagnosis": diagnosis_data.get('primary_diagnosis', 'See report'),
+                "prescription_provided": bool(prescription_data),
+                "report_format": report_data.get("report_format", "json")
+            }
         })
 
     except Exception as e:
         print(f"Error in generate_report: {str(e)}")
         return JSONResponse(
             status_code=500,
-            content={"error": str(e)}
+            content={"error": str(e), "status": "error"}
         )
 
 @app.post("/process-expo-av-audio/")
@@ -504,7 +680,7 @@ async def process_expo_av_audio(request_data: dict = Body(...)):
         audio_bytes = base64.b64decode(audio_base64)
         
         # Transcribe audio using improved speech_to_text function
-        transcribed_text = speech_to_text(audio_bytes)
+        transcribed_text = speech_to_text(audio_bytes, mime_type)
         
         # Update conversation history with user's response
         conversation_history.append({
@@ -522,18 +698,36 @@ async def process_expo_av_audio(request_data: dict = Body(...)):
             }
             generated_questions = generate_followup_questions(followup_payload)
             
-            if generated_questions and generated_questions.strip():
+            # Handle both old string format and new dict format
+            if isinstance(generated_questions, dict):
+                questions_content = generated_questions.get("content", [])
+                if isinstance(questions_content, list):
+                    questions_text = " ".join(str(q) for q in questions_content)
+                else:
+                    questions_text = str(questions_content)
+                
+                # Check if ready for diagnosis
+                ready_for_diagnosis = generated_questions.get("ready_for_diagnosis", False)
+                if ready_for_diagnosis:
+                    # Move to diagnosis stage instead of asking more questions
+                    questions_text = "Based on your responses, I have sufficient information to proceed with diagnosis."
+            else:
+                questions_text = str(generated_questions) if generated_questions else ""
+                ready_for_diagnosis = False
+            
+            if questions_text and questions_text.strip():
                 conversation_history.append({
                     "role": "assistant",
-                    "content": generated_questions
+                    "content": questions_text
                 })
                 
                 return JSONResponse({
                     "message": "Audio processed successfully. Follow-up questions generated.",
                     "transcription": transcribed_text,
-                    "questions": generated_questions,
-                    "status": "questions_pending",
-                    "conversation_stage": conversation_stage
+                    "questions": questions_text,
+                    "status": "questions_pending" if not ready_for_diagnosis else "ready_for_diagnosis",
+                    "conversation_stage": conversation_stage,
+                    "ready_for_diagnosis": ready_for_diagnosis
                 })
             else:
                 # No more questions, proceed to diagnosis
@@ -606,6 +800,110 @@ async def process_expo_av_audio(request_data: dict = Body(...)):
         conversation_history.append({
             "role": "system",
             "content": f"Error processing expo-av audio: {str(e)}"
+        })
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e), "status": "error"}
+        )
+
+@app.post("/process-text/")
+async def process_text(request_data: dict = Body(...)):
+    """
+    Fallback endpoint for text-only processing when speech-to-text is unavailable
+    
+    Payload process-text:
+    {
+        "user_text": "Patient's typed response",
+        "previous_question": "Previous AI question",
+        "user_info": {
+            "name": "John Doe",
+            "email": "abc@xyz.com"
+        }
+    }
+    """
+    global conversation_history, current_stage, stage_data
+    try:
+        user_text = request_data.get('user_text', '')
+        previous_question = request_data.get('previous_question', '')
+        current_user_info = request_data.get('user_info', {})
+        
+        if not user_text.strip():
+            raise ValueError("user_text is required")
+        
+        # Update conversation history with user's response
+        conversation_history.append({
+            "role": "user",
+            "content": user_text,
+            "user_info": current_user_info
+        })
+        
+        # Generate follow-up questions with stage progression flag
+        followup_payload = {
+            "Assistant": previous_question,
+            "user": user_text,
+            "conversation_history": conversation_history
+        }
+        
+        followup_result = generate_followup_questions(followup_payload)
+        
+        # Parse the result to check for ready_for_diagnosis flag
+        import json
+        try:
+            if isinstance(followup_result, str):
+                followup_data = json.loads(followup_result)
+            else:
+                followup_data = followup_result
+        except:
+            # Fallback for old format
+            followup_data = {"content": followup_result, "ready_for_diagnosis": False}
+        
+        ready_for_diagnosis = followup_data.get("ready_for_diagnosis", False)
+        
+        if not ready_for_diagnosis and followup_data.get("content"):
+            # More questions needed
+            content = followup_data["content"]
+            if isinstance(content, list):
+                questions_text = " ".join(str(q) for q in content)
+            elif isinstance(content, str):
+                questions_text = content
+            else:
+                questions_text = str(content)
+            
+            conversation_history.append({
+                "role": "assistant",
+                "content": questions_text
+            })
+            
+            return JSONResponse({
+                "message": "Text processed successfully. Please answer the following questions.",
+                "user_text": user_text,
+                "questions": questions_text,
+                "current_stage": "process_response",
+                "next_stage": "process_response",
+                "status": "questions_pending"
+            })
+        else:
+            # Ready for diagnosis - advance to next stage
+            current_stage = "generate_diagnosis"
+            stage_data["user_responses"] = [msg for msg in conversation_history if msg["role"] == "user"]
+            
+            return JSONResponse({
+                "message": "Sufficient information gathered. Ready for diagnosis.",
+                "user_text": user_text,
+                "current_stage": "process_response",
+                "next_stage": "generate_diagnosis",
+                "status": "ready_for_diagnosis",
+                "stage_data": {
+                    "patient_summary": followup_data.get("patient_summary", {}),
+                    "total_responses": len([msg for msg in conversation_history if msg["role"] == "user"])
+                }
+            })
+
+    except Exception as e:
+        print(f"Error in process_text: {str(e)}")
+        conversation_history.append({
+            "role": "system",
+            "content": f"Error processing text: {str(e)}"
         })
         return JSONResponse(
             status_code=500,

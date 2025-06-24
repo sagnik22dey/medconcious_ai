@@ -64,6 +64,22 @@ Based on the provided patient data, generate essential diagnostic questions tail
 
 First, extract and summarize the patient information into a structured format. For any missing fields, use "NA".
 
+## Stage Progression Logic
+
+You MUST include a "ready_for_diagnosis" flag in your response based on these criteria:
+
+**Set ready_for_diagnosis = true when:**
+- Patient has provided chief complaint/primary symptoms
+- Basic demographic info (age, gender) is available
+- Symptom duration and severity are described
+- Any relevant medical history has been gathered
+- You have sufficient information for differential diagnosis
+
+**Set ready_for_diagnosis = false when:**
+- Critical information is still missing
+- Symptoms are vague or unclear
+- More clarification is needed for accurate diagnosis
+
 ## Output Requirements
 
 Your response must strictly adhere to the following JSON format:
@@ -82,7 +98,8 @@ Your response must strictly adhere to the following JSON format:
     "Question 2 addressing potential complicating factors?",
     "Question 3 exploring diagnostic possibilities?"
   ],
-  "reasoning": "Brief clinical reasoning behind question selection"
+  "reasoning": "Brief clinical reasoning behind question selection",
+  "ready_for_diagnosis": false
 }
 ```
 
@@ -91,6 +108,7 @@ Your response must strictly adhere to the following JSON format:
 - Focus on clinical efficiency - generate only the minimum number of questions necessary for comprehensive assessment
 - Ensure questions follow standard clinical interviewing practices
 - The questions should be directly relevant to the patient data provided
+- The ready_for_diagnosis flag determines whether to proceed to diagnosis stage
 '''
 
 DIFFERENTIAL_DIAGONOSIS_GENERATION_PROMPT = """# Clinical Differential Diagnosis Generator
@@ -98,6 +116,22 @@ DIFFERENTIAL_DIAGONOSIS_GENERATION_PROMPT = """# Clinical Differential Diagnosis
 ## Instructions
 
 Generate a comprehensive differential diagnosis based on the provided patient information. Your output MUST be in valid JSON format exactly as specified below.
+
+## Stage Progression Logic
+
+You MUST include a "ready_for_prescription" flag in your response based on these criteria:
+
+**Set ready_for_prescription = true when:**
+- A primary diagnosis has been identified with reasonable confidence
+- The diagnosis is clear enough to recommend treatment
+- Patient information is sufficient for medication recommendations
+- Differential diagnosis shows a clear leading condition
+
+**Set ready_for_prescription = false when:**
+- Multiple conditions are equally likely
+- More tests or specialist consultation needed
+- Diagnosis remains uncertain
+- Insufficient information for treatment recommendations
 
 ## Output Format Requirements
 
@@ -145,6 +179,9 @@ Your response must be a single valid JSON object with the following structure:
       }
     }
   ],
+  "primary_diagnosis": "Most likely diagnosis name",
+  "confidence_level": "High/Medium/Low",
+  "ready_for_prescription": false,
   "disclaimer": "This information is provided for educational purposes only. Do not take any medication or implement treatment without consulting a qualified healthcare professional."
 }
 ```
@@ -286,6 +323,155 @@ MANDATORY TEMPLATE STRUCTURE:
 
 ---
 Disclaimer: [a brief warning telling the user Do not take any medication without consulting a Professional Doctor.]"""
+
+# PRESCRIPTION GENERATION PROMPT WITH STAGE FLAG
+PRESCRIPTION_GENERATION_PROMPT = """# Medical Prescription Generator
+
+## Instructions
+
+Generate a comprehensive prescription and treatment plan based on the provided diagnosis and patient information. Your output MUST be in valid JSON format exactly as specified below.
+
+## Stage Progression Logic
+
+You MUST include a "ready_for_report" flag in your response based on these criteria:
+
+**Set ready_for_report = true when:**
+- Prescription has been successfully generated
+- Treatment plan is complete and appropriate
+- All necessary medications and dosages are specified
+- Patient education and follow-up instructions are provided
+
+**Set ready_for_report = false when:**
+- Prescription cannot be safely generated
+- More specialist consultation required
+- Patient has contraindications that need addressing
+- Treatment plan needs modification
+
+## Output Format Requirements
+
+Your response must be a single valid JSON object with the following structure:
+
+```json
+{
+  "prescription": {
+    "diagnosis": "Primary diagnosis name",
+    "medications": [
+      {
+        "name": "Medication name",
+        "generic_name": "Generic name if different",
+        "dosage": "Strength and quantity",
+        "frequency": "How often to take",
+        "duration": "How long to take",
+        "instructions": "Special instructions for taking",
+        "purpose": "Why this medication is prescribed"
+      }
+    ],
+    "non_pharmacological_treatment": [
+      "Rest and activity modifications",
+      "Dietary recommendations",
+      "Physical therapy if needed"
+    ],
+    "follow_up": {
+      "timeline": "When to follow up",
+      "warning_signs": ["Sign 1 to watch for", "Sign 2 to watch for"],
+      "additional_tests": ["Test 1 if needed", "Test 2 if needed"]
+    }
+  },
+  "patient_education": [
+    "Important information about the condition",
+    "How to take medications properly",
+    "When to seek immediate medical attention"
+  ],
+  "ready_for_report": true,
+  "confidence_level": "High/Medium/Low",
+  "disclaimer": "This prescription is AI-generated and must be reviewed by a licensed healthcare professional before implementation."
+}
+```
+
+## Important Notes
+
+- Include only medications that are appropriate for the diagnosis
+- Specify clear dosing instructions and duration
+- Include relevant warnings and contraindications
+- Provide patient education for medication compliance
+"""
+
+# REPORT GENERATION PROMPT WITH COMPLETION FLAG
+FINAL_REPORT_GENERATION_PROMPT = """# Comprehensive Medical Report Generator
+
+## Instructions
+
+Generate a complete medical consultation report based on the entire patient interaction history. Your output MUST be in valid JSON format exactly as specified below.
+
+## Stage Progression Logic
+
+You MUST include a "consultation_complete" flag in your response:
+
+**Set consultation_complete = true when:**
+- Complete patient assessment has been documented
+- Diagnosis, prescription, and follow-up are included
+- All relevant patient information is captured
+- Report is ready for final review
+
+**consultation_complete should always be true for this final stage**
+
+## Output Format Requirements
+
+Your response must be a single valid JSON object with the following structure:
+
+```json
+{
+  "medical_report": {
+    "patient_information": {
+      "name": "Patient name",
+      "age": "Patient age",
+      "gender": "Patient gender",
+      "consultation_date": "Date of consultation",
+      "consultation_type": "Virtual/Voice-based consultation"
+    },
+    "chief_complaint": "Primary reason for consultation",
+    "history_of_present_illness": "Detailed symptom history",
+    "assessment": {
+      "primary_diagnosis": "Main diagnosis",
+      "differential_diagnoses": ["Alternative diagnosis 1", "Alternative diagnosis 2"],
+      "clinical_reasoning": "Explanation of diagnostic process"
+    },
+    "treatment_plan": {
+      "medications_prescribed": [
+        {
+          "medication": "Name and dosage",
+          "purpose": "Indication",
+          "duration": "Treatment length"
+        }
+      ],
+      "non_pharmacological_interventions": ["Intervention 1", "Intervention 2"],
+      "follow_up_instructions": "When and why to follow up"
+    },
+    "patient_education_provided": [
+      "Education point 1",
+      "Education point 2"
+    ],
+    "recommendations": [
+      "Lifestyle modifications",
+      "Additional tests if needed",
+      "Specialist referrals if indicated"
+    ]
+  },
+  "summary": "Brief summary of the consultation and key outcomes",
+  "next_steps": "Clear next steps for the patient",
+  "consultation_complete": true,
+  "report_format": "markdown",
+  "disclaimer": "This AI-generated report must be reviewed and validated by a licensed healthcare professional before any medical decisions are made."
+}
+```
+
+## Important Notes
+
+- Include comprehensive documentation of the entire consultation
+- Ensure all stages of the workflow are represented in the report
+- Provide clear next steps and follow-up instructions
+- Include appropriate medical disclaimers
+"""
 
 # PROMPTS FOR FILE ---------------------------------------------------------------------------------------------------------------------------------->
 

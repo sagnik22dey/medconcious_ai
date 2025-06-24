@@ -1,7 +1,0 @@
-{
-  "message": "Voice processed successfully with integrated transcription and response",
-  "transcription": "Hello, my name is Swapnendu Chakraborty. I am a male of age 23. I am suffering from headache.",
-  "ai_response": "Thank you, Swapnendu. I understand you're experiencing a headache. To help me understand your situation better, could you please provide more details about your headache? For instance:\n\n*   When did it start?\n*   Can you describe the pain? Is it throbbing, dull, sharp, or a pressure sensation?\n*   Where exactly is the pain located (e.g., forehead, temples, back of the head, or one side)?\n*   Are you experiencing any other symptoms along with the headache, such as nausea, sensitivity to light or sound, or vision changes?",
-  "conversation_stage": "followup",
-  "status": "success"
-}

@@ -65,6 +65,9 @@
     <button id="recordBtn" onclick="toggleRecording()" disabled>
       Start Recording
     </button>
+    <button id="playBtn" onclick="togglePlayback()" disabled>
+      Play Recording
+    </button>
     <button id="speakBtn" onclick="testSpeech()" disabled>Test Speech</button>
 
     <div class="transcript">
@@ -80,12 +83,17 @@
       let mediaRecorder = null;
       let recognition = null;
       let isRecording = false;
+      let isPlaying = false;
       let audioChunks = [];
       let audioData = null;
+      let audioBlob = null;
+      let audioUrl = null;
+      let audioElement = null;
 
       const statusEl = document.getElementById("status");
       const permissionBtn = document.getElementById("permissionBtn");
       const recordBtn = document.getElementById("recordBtn");
+      const playBtn = document.getElementById("playBtn");
       const speakBtn = document.getElementById("speakBtn");
       const transcriptEl = document.getElementById("transcript");
       const audioInfoEl = document.getElementById("audioInfo");
@@ -183,14 +191,29 @@
 
           mediaRecorder.onstop = async () => {
             console.log("MediaRecorder stopped");
-            const audioBlob = new Blob(audioChunks, {
+            audioBlob = new Blob(audioChunks, {
               type: mimeType || "audio/webm",
             });
             const arrayBuffer = await audioBlob.arrayBuffer();
             audioData = new Uint8Array(arrayBuffer);
+            
+            // Create URL for audio playback
+            if (audioUrl) {
+              URL.revokeObjectURL(audioUrl);
+            }
+            audioUrl = URL.createObjectURL(audioBlob);
+            
             audioInfoEl.textContent = `Audio recorded: ${(
               audioData.length / 1024
-            ).toFixed(1)} KB`;
+            ).toFixed(1)} KB - Ready for playback`;
+
+            // Enable play button
+            playBtn.disabled = false;
+
+            // Automatically play the recorded audio
+            setTimeout(() => {
+              playRecording();
+            }, 500);
 
             stream.getTracks().forEach((track) => track.stop());
           };
@@ -264,6 +287,65 @@
           recordBtn.textContent = "Stop Recording";
           recordBtn.classList.add("recording");
           isRecording = true;
+        }
+      }
+
+      function playRecording() {
+        if (!audioUrl) {
+          updateStatus("No recording available to play");
+          return;
+        }
+
+        try {
+          updateStatus("Playing recorded audio...");
+          
+          // Create audio element if not exists
+          if (!audioElement) {
+            audioElement = new Audio();
+            audioElement.onended = () => {
+              updateStatus("Playback finished");
+              playBtn.textContent = "Play Recording";
+              playBtn.classList.remove("recording");
+              isPlaying = false;
+            };
+            audioElement.onerror = (e) => {
+              console.error("Audio playback error:", e);
+              updateStatus("Error playing audio");
+              playBtn.textContent = "Play Recording";
+              playBtn.classList.remove("recording");
+              isPlaying = false;
+            };
+          }
+
+          audioElement.src = audioUrl;
+          audioElement.play();
+          
+          playBtn.textContent = "Stop Playback";
+          playBtn.classList.add("recording");
+          isPlaying = true;
+          
+        } catch (error) {
+          console.error("Playback error:", error);
+          updateStatus("Failed to play recording: " + error.message);
+        }
+      }
+
+      function stopPlayback() {
+        if (audioElement) {
+          audioElement.pause();
+          audioElement.currentTime = 0;
+        }
+        updateStatus("Playback stopped");
+        playBtn.textContent = "Play Recording";
+        playBtn.classList.remove("recording");
+        isPlaying = false;
+      }
+
+      function togglePlayback() {
+        if (isPlaying) {
+          stopPlayback();
+        } else {
+          playRecording();
         }
       }
 
