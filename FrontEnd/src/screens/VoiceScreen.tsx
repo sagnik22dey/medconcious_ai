@@ -328,21 +328,7 @@ export function VoiceScreen() {
         contentContainerStyle={styles.contentContainer}
         showsVerticalScrollIndicator={false}
       >
-        <View style={styles.microphoneSection}>
-          <MicrophoneButton
-            isRecording={isListening} // Reflects actual recording state from the hook
-            onPress={handleMicPress}
-            size={120}
-            disabled={
-              isLoading ||
-              isPlaying ||
-              (hasAudioRecordingPermission === false && Platform.OS !== "web")
-            }
-          />
-          <Text style={styles.recordingStatus}>
-            {isLoading ? "Processing..." : recordingStatus}
-          </Text>
-
+        <View style={styles.scrollContentWrapper}>
           {/* Display user's spoken text after server processing */}
           {userSpokenText && !isListening && !isLoading && (
             <View style={styles.transcriptContainer}>
@@ -383,22 +369,38 @@ export function VoiceScreen() {
               Audio recording permission required. Please enable in settings.
             </Text>
           )}
-        </View>
 
-        <View style={styles.suggestionsSection}>
-          <Text style={styles.suggestionsTitle}>Try saying...</Text>
-          {suggestions.map((suggestion, index) => (
-            <TouchableOpacity
-              key={index}
-              style={styles.suggestionItem}
-              onPress={() => handleSuggestionPress(suggestion)}
-              disabled={isLoading}
-            >
-              <Text style={styles.suggestionText}>"{suggestion}"</Text>
-            </TouchableOpacity>
-          ))}
+          <View style={styles.suggestionsSection}>
+            <Text style={styles.suggestionsTitle}>Try saying...</Text>
+            {suggestions.map((suggestion, index) => (
+              <TouchableOpacity
+                key={index}
+                style={styles.suggestionItem}
+                onPress={() => handleSuggestionPress(suggestion)}
+                disabled={isLoading}
+              >
+                <Text style={styles.suggestionText}>"{suggestion}"</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
         </View>
       </ScrollView>
+
+      <View style={styles.bottomMicrophoneContainer}>
+        <MicrophoneButton
+          isRecording={isListening} // Reflects actual recording state from the hook
+          onPress={handleMicPress}
+          size={120}
+          disabled={
+            isLoading ||
+            isPlaying ||
+            (hasAudioRecordingPermission === false && Platform.OS !== "web")
+          }
+        />
+        <Text style={styles.recordingStatus}>
+          {isLoading ? "Processing..." : recordingStatus}
+        </Text>
+      </View>
     </SafeAreaView>
   );
 }
@@ -444,13 +446,13 @@ const styles = StyleSheet.create({
   },
   contentContainer: {
     flexGrow: 1,
-    justifyContent: "center",
+    justifyContent: "flex-start", // Changed to flex-start
     paddingHorizontal: 20,
-    paddingBottom: 20, // Added padding at bottom
+    paddingBottom: 150, // Added padding at bottom to accommodate bottom mic button
   },
-  microphoneSection: {
+  scrollContentWrapper: { // New style for content inside ScrollView
     alignItems: "center",
-    marginBottom: 20, // Adjusted marginBottom
+    paddingTop: 20, // Add some top padding
   },
   recordingStatus: {
     fontSize: 16,
@@ -547,5 +549,14 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "500",
     marginLeft: 5,
+  },
+  bottomMicrophoneContainer: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    paddingBottom: 20, // Padding from the very bottom of the screen
+    backgroundColor: '#141414', // Match container background
   },
 });
