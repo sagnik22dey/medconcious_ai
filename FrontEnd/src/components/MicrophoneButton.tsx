@@ -31,12 +31,12 @@ export function MicrophoneButton({
         Animated.sequence([
           Animated.timing(pulseAnim, {
             toValue: 1.5,
-            duration: 1000,
+            duration: 1200,
             useNativeDriver: true,
           }),
           Animated.timing(pulseAnim, {
-            toValue: 0.8,
-            duration: 1000,
+            toValue: 1,
+            duration: 1200,
             useNativeDriver: true,
           }),
         ])
@@ -46,12 +46,12 @@ export function MicrophoneButton({
         Animated.sequence([
           Animated.timing(opacityAnim, {
             toValue: 0.3,
-            duration: 1000,
+            duration: 1200,
             useNativeDriver: true,
           }),
           Animated.timing(opacityAnim, {
             toValue: 1,
-            duration: 1000,
+            duration: 1200,
             useNativeDriver: true,
           }),
         ])

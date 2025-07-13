@@ -11,7 +11,6 @@ interface UseAudioRecorderProps {
     uri: string | null;
     mimeType?: string;
   }) => void;
-  onPlaybackFinished?: () => void;
 }
 
 // Consider renaming the hook to useAudioRecorder in the future if STT is fully removed from its responsibilities.
@@ -19,15 +18,12 @@ interface UseAudioRecorderProps {
 export function useSpeechRecognition({
   onError,
   onAudioRecorded,
-  onPlaybackFinished,
 }: UseAudioRecorderProps = {}) {
   const [isListening, setIsListening] = useState(false); // True when actively recording audio
-  const [isPlaying, setIsPlaying] = useState(false); // True when playing back recorded audio
   const [hasAudioRecordingPermission, setHasAudioRecordingPermission] =
     useState<boolean | null>(null);
   const isRecordingRef = useRef(false); // To track internal recording state reliably
   const recordingRef = useRef<Audio.Recording | null>(null);
-  const soundRef = useRef<Audio.Sound | null>(null);
   const [recordedAudioUri, setRecordedAudioUri] = useState<string | null>(null);
 
   useEffect(() => {
@@ -90,6 +86,7 @@ export function useSpeechRecognition({
   };
 
   const startListening = async () => {
+    setIsListening(true); // Update UI state to reflect recording immediately
     // This function now solely starts audio recording
     if (Platform.OS === "web") {
       onError?.(
@@ -151,11 +148,6 @@ export function useSpeechRecognition({
 
     // Reset internal and UI recording state flags
     isRecordingRef.current = false;
-    setIsListening(false); // Ensure UI is reset before attempting to start
-
-    // Brief delay to allow system resources to potentially free up after any stop/unload.
-    // This can be crucial for expo-av stability.
-    await new Promise(resolve => setTimeout(resolve, 100));
 
     try {
       console.log("Starting audio recording (expo-av)...");
@@ -209,9 +201,6 @@ export function useSpeechRecognition({
         console.log("Starting recording via startAsync()...");
         await recording.startAsync();
         
-        // Small delay to ensure recording has actually started
-        await new Promise(resolve => setTimeout(resolve, 50));
-        
         const startedStatus = await recording.getStatusAsync();
         console.log("Recording status after startAsync:", startedStatus);
         
@@ -222,7 +211,6 @@ export function useSpeechRecognition({
       }
       
       isRecordingRef.current = true;
-      setIsListening(true); // Update UI state to reflect recording
     } catch (error: any) {
       console.error("Error starting audio recording:", error);
       onError?.(`Failed to start audio recording: ${error.message}`);
@@ -244,117 +232,61 @@ export function useSpeechRecognition({
 
   const processAudioRecording = async (uri: string) => {
     try {
+      const recordingsDir = FileSystem.documentDirectory + "recordings/";
+      const dirInfo = await FileSystem.getInfoAsync(recordingsDir);
+      if (!dirInfo.exists) {
+        console.log("Creating recordings directory:", recordingsDir);
+        await FileSystem.makeDirectoryAsync(recordingsDir, {
+          intermediates: true,
+        });
+      }
+
+      const fileName = `recording-${Date.now()}.m4a`;
+      const newUri = recordingsDir + fileName;
+
+      console.log(`Moving recorded audio from ${uri} to ${newUri}`);
+      await FileSystem.moveAsync({
+        from: uri,
+        to: newUri,
+      });
+
       console.log(
-        `Processing recorded audio file for base64 conversion: ${uri}`
+        `Processing recorded audio file for base64 conversion: ${newUri}`
       );
-      const fileInfo = await FileSystem.getInfoAsync(uri);
+      const fileInfo = await FileSystem.getInfoAsync(newUri);
       if (!fileInfo || !fileInfo.exists) {
         console.error(
           "Recorded audio file does not exist or info not available:",
-          uri
+          newUri
         );
         onError?.("Recorded audio file not found.");
         return;
       }
 
-      const base64 = await FileSystem.readAsStringAsync(uri, {
+      const base64 = await FileSystem.readAsStringAsync(newUri, {
         encoding: FileSystem.EncodingType.Base64,
       });
 
-      let mimeType = "audio/m4a"; // Default to m4a since that's what we're recording
-      if (uri.endsWith(".m4a")) mimeType = "audio/m4a";
-      else if (uri.endsWith(".mp4")) mimeType = "audio/mp4";
-      else if (uri.endsWith(".aac")) mimeType = "audio/aac";
-      else if (uri.endsWith(".amr")) mimeType = "audio/amr";
-      else if (uri.endsWith(".3gp")) mimeType = "audio/3gpp";
-      else if (uri.endsWith(".wav")) mimeType = "audio/wav";
-      else if (uri.endsWith(".webm")) mimeType = "audio/webm";
-      else if (uri.endsWith(".ogg")) mimeType = "audio/ogg";
+      let mimeType = "audio/m4a"; // Default to m4a
 
       console.log(
-        `Audio recorded and converted to base64. Length: ${base64.length}, URI: ${uri}, MIME Type: ${mimeType}`
+        `Audio recorded and converted to base64. Length: ${base64.length}, URI: ${newUri}, MIME Type: ${mimeType}`
       );
-      onAudioRecorded?.({ base64, uri, mimeType });
-      setRecordedAudioUri(uri);
+      onAudioRecorded?.({ base64, uri: newUri, mimeType });
+      setRecordedAudioUri(newUri);
     } catch (error: any) {
       console.error(
-        "Error processing audio recording (base64 conversion):",
+        "Error processing audio recording (base64 conversion and saving):",
         error
       );
       onError?.(`Failed to process audio recording: ${error.message}`);
     }
   };
 
-  const playRecordedAudio = async (uri?: string) => {
-    const audioUri = uri || recordedAudioUri;
-    if (!audioUri) {
-      onError?.("No recorded audio to play");
-      return;
-    }
-
-    try {
-      console.log("Playing recorded audio:", audioUri);
-      setIsPlaying(true);
-
-      // Stop any existing playback
-      if (soundRef.current) {
-        await soundRef.current.unloadAsync();
-        soundRef.current = null;
-      }
-
-      // Set audio mode for playback
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: false,
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: false,
-        shouldDuckAndroid: true,
-        playThroughEarpieceAndroid: false,
-      });
-
-      // Create and load sound
-      const { sound } = await Audio.Sound.createAsync(
-        { uri: audioUri },
-        { shouldPlay: true }
-      );
-      
-      soundRef.current = sound;
-
-      // Set up playback status update
-      sound.setOnPlaybackStatusUpdate((status) => {
-        if (status.isLoaded && status.didJustFinish) {
-          console.log("Audio playback finished");
-          setIsPlaying(false);
-          onPlaybackFinished?.();
-        }
-      });
-
-      console.log("Audio playback started successfully");
-    } catch (error: any) {
-      console.error("Error playing recorded audio:", error);
-      setIsPlaying(false);
-      onError?.(`Failed to play recorded audio: ${error.message}`);
-    }
-  };
-
-  const stopPlayback = async () => {
-    if (soundRef.current) {
-      try {
-        await soundRef.current.stopAsync();
-        await soundRef.current.unloadAsync();
-        soundRef.current = null;
-        setIsPlaying(false);
-        console.log("Audio playback stopped");
-      } catch (error: any) {
-        console.error("Error stopping audio playback:", error);
-        onError?.(`Failed to stop audio playback: ${error.message}`);
-      }
-    }
-  };
-
   const stopListening = async () => {
+    setIsListening(false); // Update UI state to stop recording immediately
     if (!isRecordingRef.current || !recordingRef.current) {
       console.log("Not recording or recordingRef is unexpectedly null.");
-      setIsListening(false);
       isRecordingRef.current = false;
       return;
     }
@@ -387,24 +319,12 @@ export function useSpeechRecognition({
     } finally {
       recordingRef.current = null;
       isRecordingRef.current = false;
-      setIsListening(false);
+
       console.log(
         "Audio recording process fully stopped and resources released."
       );
     }
   };
-
-  // Cleanup effect for sound playback
-  useEffect(() => {
-    return () => {
-      if (soundRef.current) {
-        console.log("Cleanup: unloading sound on unmount");
-        soundRef.current.unloadAsync().catch((e) =>
-          console.error("Error unloading sound on unmount", e)
-        );
-      }
-    };
-  }, []);
 
   const speak = async (text: string) => {
     try {
@@ -429,14 +349,11 @@ export function useSpeechRecognition({
 
   return {
     isListening,
-    isPlaying,
     hasAudioRecordingPermission,
     recordedAudioUri,
     startListening,
     stopListening,
     toggle,
     speak,
-    playRecordedAudio,
-    stopPlayback,
   };
 }

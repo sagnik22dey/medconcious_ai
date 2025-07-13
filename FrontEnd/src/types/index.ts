@@ -31,8 +31,14 @@ export interface SettingsSection {
 }
 
 export type RootStackParamList = {
-  MainTabs: undefined;
+  Home: undefined;
+  Chat: undefined;
+  Voice: undefined;
   Settings: undefined;
+  'Voice-Demo': undefined;
+  'Chat-Demo': undefined;
+  Diagnosis: { diagnosisData: any }; // Updated to accept diagnosisData
+  Prescription: undefined;
 };
 
 export type MainTabParamList = {
@@ -40,3 +46,27 @@ export type MainTabParamList = {
   Chat: undefined;
   Profile: undefined;
 };
+export interface DiagnosisReport {
+  patientInfo: {
+    name: string;
+    age: number;
+    gender: 'Male' | 'Female' | 'Other';
+  };
+  symptoms: string[];
+  diagnosis: string;
+  confidence: number;
+  recommendations: string[];
+  date: string;
+}
+
+export interface Prescription {
+    id: string;
+    patientName: string;
+    medications: {
+        name: string;
+        dosage: string;
+        frequency: string;
+    }[];
+    doctorName: string;
+    date: string;
+}
