@@ -26,6 +26,13 @@ interface Question {
   audio: string;
 }
 
+interface InitializeResponse {
+  status: string;
+  user_data?: any;
+  questions?: Question[];
+  message?: string;
+}
+
 type VoiceDemoScreenNavigationProp = StackNavigationProp<RootStackParamList, 'Voice-Demo'>;
 
 export const VoiceDemoScreen = ({ navigation }: { navigation: VoiceDemoScreenNavigationProp }) => {
@@ -35,7 +42,7 @@ export const VoiceDemoScreen = ({ navigation }: { navigation: VoiceDemoScreenNav
   const [aiSound, setAiSound] = useState<Audio.Sound | null>(null);
   const [isAiSoundPlaying, setIsAiSoundPlaying] = useState(false);
   const [activeAiMessageId, setActiveAiMessageId] = useState<string | null>(null);
-  const [isChatInitialized, setIsChatInitialized] = useState(false);
+  const [isGeneratingDiagnosis, setIsGeneratingDiagnosis] = useState(false);
   const [userData, setUserData] = useState<any>(null);
   const [initialLaunch, setInitialLaunch] = useState(true);
   const scrollViewRef = useRef<ScrollView>(null);
@@ -89,16 +96,16 @@ export const VoiceDemoScreen = ({ navigation }: { navigation: VoiceDemoScreenNav
       setIsLoading(true);
       setRecordingStatus("Processing audio...");
 
-      // const YOUR_BACKEND_BASE_URL = Platform.OS === 'android'
-      //   ? "http://192.168.29.226:8000"
-      //   : "http://192.168.29.226:8000";
-            const YOUR_BACKEND_BASE_URL = Platform.OS === 'android'
-        ? "http://192.168.29.65:8000"
-        : "http://192.168.29.65:8000";
+      const YOUR_BACKEND_BASE_URL = Platform.OS === 'android'
+          ? "http://192.168.29.65:8000"
+          : "http://192.168.29.65:8000";
+
+      console.log("Starting ", isGeneratingDiagnosis);
 
       try {
-        if (!isChatInitialized) {
-          // Initial call to /initialize
+        if (!isGeneratingDiagnosis) {
+          
+          // This is the initial call to /initialize
           const endpoint = `${YOUR_BACKEND_BASE_URL}/initialize`;
           const payload = { voice_data: audioInfo.base64 };
 
@@ -106,54 +113,45 @@ export const VoiceDemoScreen = ({ navigation }: { navigation: VoiceDemoScreenNav
             headers: { "Content-Type": "application/json" },
           });
 
-          const responseData = response.data;
+          const responseData = response.data as InitializeResponse;
           console.log("Server response from /initialize:", responseData);
 
-          const initializeResponseData = responseData as {
-            status: string;
-            user_data?: any;
-            questions?: Question[];
-            message?: string;
-          };
-
-          if (initializeResponseData.status === 'success') {
-            setUserData(initializeResponseData.user_data);
-            setIsChatInitialized(true);
-            setInitialPayload(initializeResponseData); // Store the entire payload for later modification
-
+          if (responseData.status === 'success') {
+            setIsGeneratingDiagnosis(true); // Set flag to true after successful initialization
+            setUserData(responseData.user_data);
+            setInitialPayload(responseData); // Store the entire payload for later modification
             const userMessage = createMessage("Initial information provided.", "user");
             dispatch({ type: "ADD_MESSAGE", payload: userMessage });
 
-            if (initializeResponseData.questions && initializeResponseData.questions.length > 0) {
-              setQuestions(initializeResponseData.questions);
+            if (responseData.questions && responseData.questions.length > 0) {
+              setQuestions(responseData.questions);
               setCurrentQuestionIndex(0);
-              setAnswers(new Array(initializeResponseData.questions.length).fill(null)); // Initialize answers array
+              setAnswers(new Array(responseData.questions.length).fill(null)); // Initialize answers array
 
               // Ask the first question
-              const firstQuestion = initializeResponseData.questions[0];
+              const firstQuestion = responseData.questions[0];
               if (firstQuestion && firstQuestion.audio) { // Ensure the first question exists
-          const aiMessage = createMessage(firstQuestion.text || "AI asks a new question.", "ai"); // Use actual text
-          dispatch({ type: "ADD_MESSAGE", payload: aiMessage });
-          await playAiAudio(firstQuestion.audio, aiMessage.id);
-          setRecordingStatus("Please provide your answer.");
+                const aiMessage = createMessage(firstQuestion.text || "AI asks a new question.", "ai"); // Use actual text
+                dispatch({ type: "ADD_MESSAGE", payload: aiMessage });
+                await playAiAudio(firstQuestion.audio, aiMessage.id);
+                setRecordingStatus("Please provide your answer.");
               } else {
-          console.warn("No audio data for the first question.");
-          setRecordingStatus("Error: No question audio. Tap to retry.");
+                console.warn("No audio data for the first question.");
+                setRecordingStatus("Error: No question audio. Tap to retry.");
               }
             } else {
-              // No questions, either an error or initial information was sufficient
               setRecordingStatus("No follow-up questions received. Ready for diagnosis.");
             }
           } else {
-            const errorAudio = initializeResponseData.message;
+            const errorAudio = responseData.message;
             if (errorAudio) {
-          const aiMessage = createMessage("Error from server.", "ai");
-          dispatch({ type: "ADD_MESSAGE", payload: aiMessage });
-          await playAiAudio(errorAudio, aiMessage.id);
+              const aiMessage = createMessage("Error from server.", "ai");
+              dispatch({ type: "ADD_MESSAGE", payload: aiMessage });
+              await playAiAudio(errorAudio, aiMessage.id);
             }
             setRecordingStatus("Initialization failed. Tap to retry.");
           }
-        } else {
+        } else if (isGeneratingDiagnosis) {
           // Subsequent calls: answering a question
           const currentAnswers = [...answers];
           currentAnswers[currentQuestionIndex] = audioInfo.base64; // Store the current answer
@@ -179,39 +177,28 @@ export const VoiceDemoScreen = ({ navigation }: { navigation: VoiceDemoScreenNav
             setIsLoading(true);
             setRecordingStatus("Diagnosis in progress...");
 
-            // Prepare the final payload for diagnosis in the specified format
-            const qaPayload = questions.map((question, index) => {
-              return {
-          question: question.audio, // base64 audio of the question
-          answer: currentAnswers[index]    // base64 audio of the answer
-              };
-            });
+            const qaPayload = questions.map((question, index) => ({
+              question: question.audio,
+              answer: currentAnswers[index]
+            }));
 
-            const diagnosisPayload = {
-              user_data: userData,
-              questions_and_answers: qaPayload
-            };
-
-            const endpoint = `${YOUR_BACKEND_BASE_URL}/generate_diagnosis`;
-            
-            const response = await axios.post(endpoint, diagnosisPayload, {
+            const response = await axios.post(`${YOUR_BACKEND_BASE_URL}/get_diagnosis`, qaPayload, {
               headers: { "Content-Type": "application/json" },
             });
 
             const diagnosisResponseData = response.data;
-            console.log("Server response from /generate_diagnosis:", diagnosisResponseData);
+            console.log("Server response from /get_diagnosis:", diagnosisResponseData);
 
             const userMessage = createMessage("All answers provided. Generating diagnosis.", "user");
             dispatch({ type: "ADD_MESSAGE", payload: userMessage });
 
-            // Navigate to DiagnosisScreen
             navigation.navigate('Diagnosis', { diagnosisData: diagnosisResponseData });
             setRecordingStatus("Diagnosis completed.");
-            setIsLoading(false); // Ensure loader is hidden after navigation
-            return; // Exit early to prevent setting status again
+            setIsLoading(false);
+            return;
           }
         }
-        setIsLoading(false); // Hide loader after processing response or playing next question
+        setIsLoading(false);
       } catch (error: any) {
         console.error("Network/Server Error:", error.message);
         setRecordingStatus(`Error: ${error.message.substring(0, 50)}...`);
@@ -233,6 +220,7 @@ export const VoiceDemoScreen = ({ navigation }: { navigation: VoiceDemoScreenNav
     }
   }, [isListening, isLoading, isAiSoundPlaying]);
 
+
   const handleMicPress = () => {
     console.log(
       "Mic pressed. Current isListening (from hook):",
@@ -246,13 +234,8 @@ export const VoiceDemoScreen = ({ navigation }: { navigation: VoiceDemoScreenNav
       console.log("Mic press ignored, currently loading API response or playing audio.");
       return;
     }
-
-    if (!isChatInitialized || (isChatInitialized && currentQuestionIndex < questions.length)) {
-      toggle();
-    } else {
-      console.log("Cannot record: All questions answered or not in a recording phase.");
-      Alert.alert("Action Not Allowed", "Please wait for the diagnosis process to complete or provide your answer to the current question.");
-    }
+    // The mic on/off is not dependent on flags, just toggle the recording state.
+    toggle();
   };
 
 
@@ -273,9 +256,9 @@ export const VoiceDemoScreen = ({ navigation }: { navigation: VoiceDemoScreenNav
             setIsAiSoundPlaying(false);
             setActiveAiMessageId(null);
             // This is crucial: after AI finishes speaking a question, prompt user to answer
-            if (isChatInitialized && currentQuestionIndex < questions.length) {
+            if (isGeneratingDiagnosis && currentQuestionIndex < questions.length) {
               setRecordingStatus("Please provide your answer.");
-            } else if (isChatInitialized && currentQuestionIndex === questions.length) {
+            } else if (isGeneratingDiagnosis && currentQuestionIndex === questions.length) {
                 // If AI was playing the last question and it's done, and all answers are collected
                 // This state should not be reached if diagnosis is auto-triggered
                 setRecordingStatus("All questions asked. Ready for diagnosis.");
@@ -323,7 +306,7 @@ export const VoiceDemoScreen = ({ navigation }: { navigation: VoiceDemoScreenNav
   useFocusEffect(
     React.useCallback(() => {
       // Reset state when screen is focused
-      setIsChatInitialized(false);
+      setIsGeneratingDiagnosis(false);
       setUserData(null);
       setQuestions([]);
       setCurrentQuestionIndex(0);
@@ -369,7 +352,7 @@ export const VoiceDemoScreen = ({ navigation }: { navigation: VoiceDemoScreenNav
             <MaterialCommunityIcons name="robot-outline" size={48} color="#007AFF" />
             <Text style={styles.welcomeTitle}>Welcome to Med-Conscious</Text>
             <Text style={styles.welcomeText}>
-              {isChatInitialized && questions.length > 0 && currentQuestionIndex < questions.length
+              {isGeneratingDiagnosis && questions.length > 0 && currentQuestionIndex < questions.length
                 ? `Please listen to Question ${currentQuestionIndex + 1} and record your answer.`
                 : (isListening ? "I'm listening for your symptoms, age, and gender." : "Tap the microphone to start the diagnosis process.")
               }
@@ -401,7 +384,7 @@ export const VoiceDemoScreen = ({ navigation }: { navigation: VoiceDemoScreenNav
         ))}
 
         {/* Display current question indicator if AI is speaking a question */}
-        {isChatInitialized && questions.length > 0 && currentQuestionIndex < questions.length && isAiSoundPlaying && (
+        {isGeneratingDiagnosis && questions.length > 0 && currentQuestionIndex < questions.length && isAiSoundPlaying && (
             <View style={[styles.messageBubble, styles.aiBubble]}>
                 <Text style={styles.aiText}>
                     {`AI is speaking Question ${currentQuestionIndex + 1}...`}
@@ -422,7 +405,7 @@ export const VoiceDemoScreen = ({ navigation }: { navigation: VoiceDemoScreenNav
           isRecording={isListening}
           onPress={handleMicPress}
           size={80}
-          disabled={isLoading || isAiSoundPlaying || (hasAudioRecordingPermission === false && Platform.OS !== "web") || (isChatInitialized && currentQuestionIndex === questions.length)}
+          disabled={isLoading || isAiSoundPlaying || (hasAudioRecordingPermission === false && Platform.OS !== "web") || (isGeneratingDiagnosis && currentQuestionIndex === questions.length)}
         />
       </View>
     </SafeAreaView>
