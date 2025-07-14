@@ -45,8 +45,8 @@ const HomeScreen = ({ navigation }: { navigation: HomeScreenNavigationProp }) =>
   return (
     <View style={styles.container}>
       {stars}
-      <Animatable.View animation="fadeIn" duration={1500} style={styles.content}>
-        <Text style={styles.title}>Medi-Conscious AI</Text>
+      <View style={styles.content}>
+        <Animatable.Text animation="fadeIn" duration={1500} style={styles.title}>Medi-Conscious AI</Animatable.Text>
         <View style={styles.buttonContainer}>
           <TouchableOpacity style={styles.button} onPress={() => navigation.navigate('Voice-Demo')}>
             <MaterialCommunityIcons name="microphone" size={24} color="white" />
@@ -57,7 +57,7 @@ const HomeScreen = ({ navigation }: { navigation: HomeScreenNavigationProp }) =>
             <Text style={styles.buttonText}>Chat</Text>
           </TouchableOpacity>
         </View>
-      </Animatable.View>
+      </View>
     </View>
   );
 };
