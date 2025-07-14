@@ -89,9 +89,12 @@ export const VoiceDemoScreen = ({ navigation }: { navigation: VoiceDemoScreenNav
       setIsLoading(true);
       setRecordingStatus("Processing audio...");
 
-      const YOUR_BACKEND_BASE_URL = Platform.OS === 'android'
-        ? "http://192.168.29.226:8000"
-        : "http://192.168.29.226:8000";
+      // const YOUR_BACKEND_BASE_URL = Platform.OS === 'android'
+      //   ? "http://192.168.29.226:8000"
+      //   : "http://192.168.29.226:8000";
+            const YOUR_BACKEND_BASE_URL = Platform.OS === 'android'
+        ? "http://192.168.29.65:8000"
+        : "http://192.168.29.65:8000";
 
       try {
         if (!isChatInitialized) {
@@ -129,13 +132,13 @@ export const VoiceDemoScreen = ({ navigation }: { navigation: VoiceDemoScreenNav
               // Ask the first question
               const firstQuestion = initializeResponseData.questions[0];
               if (firstQuestion && firstQuestion.audio) { // Ensure the first question exists
-                const aiMessage = createMessage(firstQuestion.text || "AI asks a new question.", "ai"); // Use actual text
-                dispatch({ type: "ADD_MESSAGE", payload: aiMessage });
-                await playAiAudio(firstQuestion.audio, aiMessage.id);
-                setRecordingStatus("Please provide your answer.");
+          const aiMessage = createMessage(firstQuestion.text || "AI asks a new question.", "ai"); // Use actual text
+          dispatch({ type: "ADD_MESSAGE", payload: aiMessage });
+          await playAiAudio(firstQuestion.audio, aiMessage.id);
+          setRecordingStatus("Please provide your answer.");
               } else {
-                console.warn("No audio data for the first question.");
-                setRecordingStatus("Error: No question audio. Tap to retry.");
+          console.warn("No audio data for the first question.");
+          setRecordingStatus("Error: No question audio. Tap to retry.");
               }
             } else {
               // No questions, either an error or initial information was sufficient
@@ -144,9 +147,9 @@ export const VoiceDemoScreen = ({ navigation }: { navigation: VoiceDemoScreenNav
           } else {
             const errorAudio = initializeResponseData.message;
             if (errorAudio) {
-                const aiMessage = createMessage("Error from server.", "ai");
-                dispatch({ type: "ADD_MESSAGE", payload: aiMessage });
-                await playAiAudio(errorAudio, aiMessage.id);
+          const aiMessage = createMessage("Error from server.", "ai");
+          dispatch({ type: "ADD_MESSAGE", payload: aiMessage });
+          await playAiAudio(errorAudio, aiMessage.id);
             }
             setRecordingStatus("Initialization failed. Tap to retry.");
           }
@@ -176,23 +179,22 @@ export const VoiceDemoScreen = ({ navigation }: { navigation: VoiceDemoScreenNav
             setIsLoading(true);
             setRecordingStatus("Diagnosis in progress...");
 
-            // Prepare the final payload for diagnosis
-            // The task implies modifying the initial response and sending it back.
-            // The backend's /generate_diagnosis expects `voice_data` and `user_data`.
-            // We'll put the collected answers into `user_data`.
-            const finalUserDataForDiagnosis = {
-                ...userData, // Original user_data (age, gender, symptoms)
-                conversation_questions_audio: initialPayload.questions.map((q: Question) => q.audio), // Original questions' audio
-                conversation_answers_audio: currentAnswers // User's recorded answers' audio
+            // Prepare the final payload for diagnosis in the specified format
+            const qaPayload = questions.map((question, index) => {
+              return {
+          question: question.audio, // base64 audio of the question
+          answer: currentAnswers[index]    // base64 audio of the answer
+              };
+            });
+
+            const diagnosisPayload = {
+              user_data: userData,
+              questions_and_answers: qaPayload
             };
 
             const endpoint = `${YOUR_BACKEND_BASE_URL}/generate_diagnosis`;
-            const payloadForDiagnosis = {
-              voice_data: audioInfo.base64, // The last recorded audio
-              user_data: finalUserDataForDiagnosis,
-            };
-
-            const response = await axios.post(endpoint, payloadForDiagnosis, {
+            
+            const response = await axios.post(endpoint, diagnosisPayload, {
               headers: { "Content-Type": "application/json" },
             });
 

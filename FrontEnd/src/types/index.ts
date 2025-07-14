@@ -10,6 +10,7 @@ export interface AppState {
   isChatRecording: boolean;
   messages: ChatMessage[];
   currentScreen: string;
+  patientData: any | null; // To store patient information for subsequent requests
 }
 
 export interface VoiceRecognitionResult {

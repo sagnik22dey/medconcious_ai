@@ -12,13 +12,15 @@ type AppAction =
   | { type: 'ADD_MESSAGE'; payload: ChatMessage }
   | { type: 'UPDATE_MESSAGE_TEXT'; payload: { id: string; newText: string } } // Added new action
   | { type: 'SET_CURRENT_SCREEN'; payload: string }
-  | { type: 'CLEAR_MESSAGES' };
+  | { type: 'CLEAR_MESSAGES' }
+  | { type: 'SET_PATIENT_DATA'; payload: any }; // Add action type for patient data
 
 const initialState: AppState = {
   isRecording: false,
   isChatRecording: false,
   messages: [],
   currentScreen: 'Voice',
+  patientData: null, // Initialize patientData as null
 };
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -42,6 +44,8 @@ function appReducer(state: AppState, action: AppAction): AppState {
       return { ...state, currentScreen: action.payload };
     case 'CLEAR_MESSAGES':
       return { ...state, messages: [] };
+    case 'SET_PATIENT_DATA': // Add reducer case for patient data
+      return { ...state, patientData: action.payload };
     default:
       return state;
   }
