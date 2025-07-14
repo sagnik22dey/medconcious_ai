@@ -98,8 +98,8 @@ export const VoiceDemoScreen = ({ navigation }: { navigation: VoiceDemoScreenNav
       setRecordingStatus("Processing audio...");
 
       const YOUR_BACKEND_BASE_URL = Platform.OS === 'android'
-          ? "http://192.168.29.226:8000"
-          : "http://192.168.29.226:8000";
+          ? "http://192.168.29.65:8000"
+          : "http://192.168.29.65:8000";
 
       console.log("Starting ", isGeneratingDiagnosis);
 

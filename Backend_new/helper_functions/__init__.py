@@ -25,7 +25,7 @@ Your response must strictly adhere to the following JSON format:
 - Focus on clinical efficiency - generate only the minimum number of questions necessary for comprehensive assessment
 - Ensure questions follow standard clinical interviewing practices
 - The questions should be directly relevant to the patient data provided
-- you can ask at most 10 questions and at least 3 questions.
+- you can ask at most 5 questions and at least 3 questions.
 '''
 
 DIFFERENTIAL_DIAGONOSIS_GENERATION_PROMPT = """# Clinical Differential Diagnosis Generator

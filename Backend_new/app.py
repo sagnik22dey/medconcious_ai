@@ -210,8 +210,11 @@ async def initialize_chat(background_tasks: BackgroundTasks, payload: dict = Bod
 async def generate_diagnosis(payload: dict = Body(...)):
     with open("user_data.json", "w") as f:
         json.dump(payload, f)
-    data = payload.get("questions", [])
-    diagnosis = Process_parts_with_Gemini(data, DIFFERENTIAL_DIAGONOSIS_GENERATION_PROMPT.replace("[[patient_details]]", str(payload.get("user_data", {}))))
+    file = "user_data.json"
+    object = json.load(open(file, "r"))
+    data = object.get("questions", [])
+    diagnosis = Process_parts_with_Gemini(data, DIFFERENTIAL_DIAGONOSIS_GENERATION_PROMPT.replace("[[patient_details]]", str(object.get("user_data", {}))))
+    # diagnosis = Process_parts_with_Gemini(payload, DIFFERENTIAL_DIAGONOSIS_GENERATION_PROMPT.replace("[[patient_details]]", str(payload.get("user_data", {}))))
     return diagnosis
 
 

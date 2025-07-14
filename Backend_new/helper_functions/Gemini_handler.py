@@ -111,7 +111,7 @@ def Process_parts_with_Gemini(data, sys):
         parts.append(types.Part.from_text(text=item['text']))
         parts.append(types.Part.from_bytes(mime_type="audio/mpeg",data=base64.b64decode(item['audio'])))
 
-    model = "gemini-2.5-flash"
+    model = "gemini-2.0-flash"
     contents = [
         types.Content(
             role="user",
@@ -119,7 +119,7 @@ def Process_parts_with_Gemini(data, sys):
         ),
     ]
     generate_content_config = types.GenerateContentConfig(
-        thinking_config=types.ThinkingConfig(thinking_budget=0), # Removed thinking_budget
+        # thinking_config=types.ThinkingConfig(), # Removed thinking_budget
         response_mime_type="application/json",
         system_instruction=[
             types.Part.from_text(text=sys),
