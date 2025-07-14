@@ -45,6 +45,7 @@ export const VoiceDemoScreen = ({ navigation }: { navigation: VoiceDemoScreenNav
   const [isGeneratingDiagnosis, setIsGeneratingDiagnosis] = useState(false);
   const [userData, setUserData] = useState<any>(null);
   const [initialLaunch, setInitialLaunch] = useState(true);
+  const [isDiagnosisInProgress, setIsDiagnosisInProgress] = useState(false);
   const scrollViewRef = useRef<ScrollView>(null);
 
   // New state variables for question/answer flow
@@ -97,8 +98,8 @@ export const VoiceDemoScreen = ({ navigation }: { navigation: VoiceDemoScreenNav
       setRecordingStatus("Processing audio...");
 
       const YOUR_BACKEND_BASE_URL = Platform.OS === 'android'
-          ? "http://192.168.29.65:8000"
-          : "http://192.168.29.65:8000";
+          ? "http://192.168.29.226:8000"
+          : "http://192.168.29.226:8000";
 
       console.log("Starting ", isGeneratingDiagnosis);
 
@@ -117,6 +118,7 @@ export const VoiceDemoScreen = ({ navigation }: { navigation: VoiceDemoScreenNav
           console.log("Server response from /initialize:", responseData);
 
           if (responseData.status === 'success') {
+            setIsDiagnosisInProgress(true);
             setIsGeneratingDiagnosis(true); // Set flag to true after successful initialization
             setUserData(responseData.user_data);
             setInitialPayload(responseData); // Store the entire payload for later modification
@@ -182,12 +184,12 @@ export const VoiceDemoScreen = ({ navigation }: { navigation: VoiceDemoScreenNav
               answer: currentAnswers[index]
             }));
 
-            const response = await axios.post(`${YOUR_BACKEND_BASE_URL}/get_diagnosis`, qaPayload, {
+            const response = await axios.post(`${YOUR_BACKEND_BASE_URL}/generate_diagnosis`, qaPayload, {
               headers: { "Content-Type": "application/json" },
             });
 
             const diagnosisResponseData = response.data;
-            console.log("Server response from /get_diagnosis:", diagnosisResponseData);
+            console.log("Server response from /generate_diagnosis:", diagnosisResponseData);
 
             const userMessage = createMessage("All answers provided. Generating diagnosis.", "user");
             dispatch({ type: "ADD_MESSAGE", payload: userMessage });
@@ -195,6 +197,7 @@ export const VoiceDemoScreen = ({ navigation }: { navigation: VoiceDemoScreenNav
             navigation.navigate('Diagnosis', { diagnosisData: diagnosisResponseData });
             setRecordingStatus("Diagnosis completed.");
             setIsLoading(false);
+            setIsDiagnosisInProgress(false);
             return;
           }
         }
@@ -221,7 +224,7 @@ export const VoiceDemoScreen = ({ navigation }: { navigation: VoiceDemoScreenNav
   }, [isListening, isLoading, isAiSoundPlaying]);
 
 
-  const handleMicPress = () => {
+  const handleMicPress = async () => {
     console.log(
       "Mic pressed. Current isListening (from hook):",
       isListening,
@@ -230,10 +233,15 @@ export const VoiceDemoScreen = ({ navigation }: { navigation: VoiceDemoScreenNav
       "isAiSoundPlaying:",
       isAiSoundPlaying
     );
-    if (isLoading || isAiSoundPlaying) {
-      console.log("Mic press ignored, currently loading API response or playing audio.");
+    if (isLoading) {
+      console.log("Mic press ignored, currently loading API response.");
       return;
     }
+
+    if (isAiSoundPlaying) {
+      await stopAiAudio();
+    }
+    
     // The mic on/off is not dependent on flags, just toggle the recording state.
     toggle();
   };
@@ -252,7 +260,7 @@ export const VoiceDemoScreen = ({ navigation }: { navigation: VoiceDemoScreenNav
         { uri: `data:audio/mpeg;base64,${base64Audio}` },
         { shouldPlay: true },
         (status) => {
-          if (status.isLoaded && !status.isPlaying) {
+          if (status.isLoaded && status.didJustFinish) {
             setIsAiSoundPlaying(false);
             setActiveAiMessageId(null);
             // This is crucial: after AI finishes speaking a question, prompt user to answer
@@ -305,6 +313,9 @@ export const VoiceDemoScreen = ({ navigation }: { navigation: VoiceDemoScreenNav
 
   useFocusEffect(
     React.useCallback(() => {
+      if (isDiagnosisInProgress) {
+        return;
+      }
       // Reset state when screen is focused
       setIsGeneratingDiagnosis(false);
       setUserData(null);
@@ -329,7 +340,7 @@ export const VoiceDemoScreen = ({ navigation }: { navigation: VoiceDemoScreenNav
           aiSound.unloadAsync();
         }
       };
-    }, [dispatch, aiSound])
+    }, [dispatch, aiSound, isDiagnosisInProgress])
   );
 
 
@@ -405,7 +416,7 @@ export const VoiceDemoScreen = ({ navigation }: { navigation: VoiceDemoScreenNav
           isRecording={isListening}
           onPress={handleMicPress}
           size={80}
-          disabled={isLoading || isAiSoundPlaying || (hasAudioRecordingPermission === false && Platform.OS !== "web") || (isGeneratingDiagnosis && currentQuestionIndex === questions.length)}
+          disabled={isLoading || (hasAudioRecordingPermission === false && Platform.OS !== "web") || (isGeneratingDiagnosis && currentQuestionIndex === questions.length)}
         />
       </View>
     </SafeAreaView>

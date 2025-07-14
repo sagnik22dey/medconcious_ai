@@ -11,7 +11,7 @@ const DiagnosisScreen = () => {
   useEffect(() => {
     const fetchDiagnosisReport = async () => {
       try {
-        const response = await axios.get<DiagnosisReport>('http://192.168.29.226:8000/diagnosis');
+        const response = await axios.post<DiagnosisReport>('http://192.168.29.226:8000/generate_diagnosis');
         setDiagnosisReport(response.data);
       } catch (err) {
         setError('Failed to fetch diagnosis report.');
